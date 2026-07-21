@@ -1,0 +1,41 @@
+# ── 构建上下文排除文件 ──────────────────────────────────────────
+# 避免把无关文件打进镜像，加快构建、减小上下文体积
+
+# Python 缓存与虚拟环境
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+
+# IDE 与编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志与运行时产物
+logs/
+*.log
+
+# 版本控制
+.git/
+.gitignore
+
+# Docker 自身（避免递归）
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 文档
+README.md
+*.md
+
+# 测试（生产镜像不需要）
+tests/
+
+# OS 产物
+.DS_Store
+Thumbs.db

@@ -1,0 +1,48 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+develop-eggs/
+
+# ── 虚拟环境 ──
+.venv/
+venv/
+env/
+ENV/
+
+# ── uv ──
+.uv/
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── 日志与运行时产物 ──
+logs/
+*.log
+
+# ── 测试与覆盖率 ──
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── 环境变量与本地配置（敏感信息不入库）──
+.env
+.env.local
+
+# ── 操作系统 ──
+.DS_Store
+Thumbs.db
+
+# ── 编辑器/工具产物 ──
+.zcode/

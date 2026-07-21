@@ -1,0 +1,40 @@
+# ====================================================================
+# bsd-unitree-controller 配置文件
+# 类比 Spring Boot 的 application.yml
+#
+# 环境变量覆盖（优先级高于本文件）：
+#   前缀 BSD_，嵌套用 __ 分隔，字段名转小写
+#   BSD_SERVER__PORT=9000              -> server.port
+#   BSD_SERVER__HOST=127.0.0.1         -> server.host
+#   BSD_UPSTREAM__TIMEOUT=5            -> upstream.timeout
+#   BSD_UPSTREAM__RETRY=3              -> upstream.retry
+#   BSD_LOG__LEVEL=DEBUG               -> log.level
+#   BSD_LOG__DIR=                      -> log.dir（空字符串只输出控制台）
+#   BSD_ROS__ENABLED=false             -> ros.enabled（开发机关闭 ROS）
+#   BSD_ROS__NODE_NAME=xxx             -> ros.node_name
+# ====================================================================
+
+# ── 服务（FastAPI）配置 ──
+server:
+  host: "0.0.0.0"
+  port: 18800
+
+# ── 出站 HTTP 调用通用配置 ──
+# 各上游 URL 在业务代码里按需硬编码（会有多个目标地址）
+upstream:
+  # 出站请求超时（秒）
+  timeout: 10
+  # 出站请求重试次数（不含首次，实际最多调 retry+1 次）
+  retry: 2
+
+# ── 日志配置 ──
+log:
+  level: "INFO"        # DEBUG / INFO / WARNING / ERROR
+  # 日志文件目录，为空则只输出控制台
+  dir: "logs"
+
+# ── ROS 节点配置 ──
+# 部署在机器人内部时启用，开发机无 rclpy 时设为 false 走纯 HTTP 模式
+ros:
+  enabled: true              # 是否启用 ROS 节点
+  node_name: "controller"    # ROS 节点名（ros2 node list 里显示的名字）

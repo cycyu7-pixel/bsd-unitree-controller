@@ -1,0 +1,43 @@
+# ====================================================================
+# bsd-unitree-controller Docker Compose 配置
+#
+# 部署到机器人内部使用。关键点：
+#   1. network_mode: host -- ROS 2 DDS 必须用主机网络，否则容器内外节点互相看不见
+#   2. ROS_DOMAIN_ID 要跟机器人上其他 ROS 节点一致
+#   3. 配置和日志外挂，改配置不用重打镜像
+# ====================================================================
+version: "3.8"
+
+services:
+  bsd-controller:
+    build: .
+    image: bsd-unitree-controller:0.1.0
+    container_name: bsd-controller
+    # 关键：ROS 2 DDS 用多播自动发现节点，必须用主机网络
+    # 不能用默认 bridge，否则容器内节点和宿主机其他 ROS 节点互相看不见
+    network_mode: host
+    restart: unless-stopped
+
+    # 外挂配置和日志，改配置不用重打镜像
+    volumes:
+      # 配置只读挂载，防止容器内误改
+      - ./config/config.yaml:/app/config/config.yaml:ro
+      # 日志读写挂载，宿主机可直接查看
+      - ./logs:/app/logs
+
+    environment:
+      # ROS 2 域 ID，必须跟机器人上其他 ROS 节点一致才能通信
+      # 检查其他节点的 ROS_DOMAIN_ID，对齐到同一个值
+      - ROS_DOMAIN_ID=0
+      # 时区
+      - TZ=Asia/Shanghai
+      # 如需覆盖配置，可用环境变量（优先级高于 yaml）
+      # - BSD_SERVER__PORT=18800
+      # - BSD_ROS__ENABLED=true
+
+    # 日志驱动限制，避免日志撑爆磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
