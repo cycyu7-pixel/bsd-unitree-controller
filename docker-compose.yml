@@ -1,10 +1,14 @@
 # ====================================================================
 # bsd-unitree-controller Docker Compose 配置
 #
-# 部署到机器人内部使用。关键点：
-#   1. network_mode: host -- ROS 2 DDS 必须用主机网络，否则容器内外节点互相看不见
-#   2. ROS_DOMAIN_ID 要跟机器人上其他 ROS 节点一致
-#   3. 配置和日志外挂，改配置不用重打镜像
+# 部署到宇树 G1 机器人（unitree-g1-nx）使用。
+#
+# 关键设计：挂载机器人的 ROS 环境，不把 rclpy/unitree_api 装进镜像。
+#   /opt/ros/humble          -> rclpy / std_srvs / geometry_msgs
+#   /home/unitree/unitree_ros2_ws -> unitree_api（Unitree 编译的）
+#
+# 必须用 host 网络：ROS 2 DDS 用多播自动发现节点，
+# bridge 网络会导致容器内外节点互相看不见。
 # ====================================================================
 version: "3.8"
 
@@ -13,27 +17,28 @@ services:
     build: .
     image: bsd-unitree-controller:0.1.0
     container_name: bsd-controller
-    # 关键：ROS 2 DDS 用多播自动发现节点，必须用主机网络
-    # 不能用默认 bridge，否则容器内节点和宿主机其他 ROS 节点互相看不见
+    # 关键：ROS 2 DDS 必须用主机网络
     network_mode: host
     restart: unless-stopped
 
-    # 外挂配置和日志，改配置不用重打镜像
+    # 挂载机器人的 ROS 环境 + 项目配置/日志
     volumes:
-      # 配置只读挂载，防止容器内误改
+      # ROS Humble 环境（rclpy / std_srvs / geometry_msgs 等系统级包）
+      - /opt/ros/humble:/opt/ros/humble:ro
+      # Unitree 工作空间（unitree_api 包）
+      - /home/unitree/unitree_ros2_ws:/unitree_ws:ro
+      # 配置只读挂载，改配置不用重打镜像
       - ./config/config.yaml:/app/config/config.yaml:ro
       # 日志读写挂载，宿主机可直接查看
       - ./logs:/app/logs
 
     environment:
-      # ROS 2 域 ID，必须跟机器人上其他 ROS 节点一致才能通信
-      # 检查其他节点的 ROS_DOMAIN_ID，对齐到同一个值
+      # ROS 2 域 ID，必须跟机器人其他 ROS 节点一致（G1 默认 0）
       - ROS_DOMAIN_ID=0
+      # DDS 中间件，跟机器人一致（G1 用 Cyclone DDS）
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       # 时区
       - TZ=Asia/Shanghai
-      # 如需覆盖配置，可用环境变量（优先级高于 yaml）
-      # - BSD_SERVER__PORT=18800
-      # - BSD_ROS__ENABLED=true
 
     # 日志驱动限制，避免日志撑爆磁盘
     logging:

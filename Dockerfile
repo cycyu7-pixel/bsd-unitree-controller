@@ -1,48 +1,45 @@
 # ====================================================================
 # bsd-unitree-controller Dockerfile
 #
-# 基础镜像：ROS 2 Humble + Ubuntu 22.04（自带 rclpy + Python 3.10）
-# 不能用 python:3.11，因为 rclpy 依赖 ROS 的 C 库（rcl/rmw/DDS），
-# 必须用带 ROS 运行时的镜像，pip 装不了系统级 rclpy。
+# 部署到宇树 G1 机器人（unitree-g1-nx）使用。
+#
+# 关键设计：不把 ROS 装进镜像，而是运行时挂载机器人的 ROS 环境。
+#   原因：rclpy / unitree_api / Cyclone DDS 都在机器人系统里，
+#   装进镜像体积大且版本难对齐。挂载方式最稳。
+#
+# 镜像只装 Python 依赖（fastapi/httpx/tenacity 等），
+# ROS 相关包（rclpy/unitree_api/std_srvs）通过 docker-compose 挂载进来。
 # ====================================================================
-FROM osrf/ros:humble-ros-base
+FROM python:3.10-slim
 
-# ROS 环境变量：让 rclpy 能找到底层 C 库
-ENV ROS_DISTRO=humble
-# 每个 shell 启动自动 source ROS 环境
-RUN echo "source /opt/ros/humble/setup.bash" >> /etc/bash.bashrc
-
-# 装构建依赖：pip + 包管理工具
-# 清理 apt 缓存减小镜像体积
+# 装系统依赖（运行 Python 包 + DDS 通信需要）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-pip \
+        libssl3 \
+        libcurl4 \
+        curl \
     && rm -rf /var/lib/apt/lists/*
-
-# 升级 pip，避免老版本对 pydantic v2 的打包问题
-RUN pip3 install --no-cache-dir --upgrade pip
 
 # 工作目录
 WORKDIR /app
 
 # 先拷依赖声明，利用 Docker 缓存层
-# 改代码时不会重装 Python 依赖，构建快
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 
-# 装 Python 依赖（用系统 Python 3.10，不建虚拟环境，简化部署）
-# rclpy 来自基础镜像的 apt，不通过 pip 装
-# --no-deps 避免 pip 试图解析 rclpy（PyPI 上不可用）
-RUN pip3 install --no-cache-dir .
+# 装 Python 依赖（用 --no-deps 避免解析 rclpy，PyPI 上不可用）
+# rclpy / std_srvs / geometry_msgs / unitree_api 都来自挂载的 ROS 环境，不通过 pip 装
+RUN pip install --no-cache-dir --no-deps -e . 2>/dev/null || \
+    pip install --no-cache-dir -e . --no-build-isolation
 
 # 拷源码
 COPY . .
 
-# 时区设为上海，日志时间正确
+# 时区
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 暴露 FastAPI 端口（仅文档作用，host 网络模式下不生效）
+# 暴露 FastAPI 端口
 EXPOSE 18800
 
-# 启动命令：source ROS 环境后启动服务
-# 必须在运行时 source，因为 CMD 不走 /etc/bash.bashrc
-CMD ["bash", "-c", "source /opt/ros/humble/setup.bash && python3 main.py"]
+# 启动命令：source 挂载进来的 ROS 环境 + DDS 配置后启动
+# 必须在运行时 source，因为 ROS 环境通过 volume 挂载，构建时不存在
+CMD ["bash", "-c", "source /opt/ros/humble/setup.bash && source /unitree_ws/install/setup.bash && export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && python3 main.py"]

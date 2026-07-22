@@ -35,6 +35,9 @@ except ImportError:
 # /cmd_vel 是 ROS 生态通用的运动控制话题名，大多数底盘节点默认订阅
 CMD_VEL_TOPIC = "/cmd_vel"
 
+# G1 急停 service 名（std_srvs/Trigger 类型）
+ESTOP_SERVICE = "/g1/estop/trigger"
+
 
 class ControllerNode(_BaseNode):
     """机器人控制 ROS 节点。
@@ -64,6 +67,12 @@ class ControllerNode(_BaseNode):
         # queue_size=10 表示缓冲 10 条指令，超出丢弃旧的
         self._cmd_pub = self.create_publisher(Twist, CMD_VEL_TOPIC, 10)
         self.get_logger().info(f"运动控制 publisher 已注册: {CMD_VEL_TOPIC}")
+
+        # ── 急停 service client：调用 /g1/estop/trigger ─────────────
+        # G1 的急停是 ROS service（std_srvs/Trigger），不是 topic
+        # 用 create_client 创建客户端，调用时用 call_async 不阻塞 event loop
+        self._estop_client = self.create_client(Trigger, ESTOP_SERVICE)
+        self.get_logger().info(f"急停 service client 已创建: {ESTOP_SERVICE}")
 
         # ── 注册 ROS service：其他节点可通过 ros2 service call 调用 ──
         # ~/is_alive 会解析成 /<node_name>/is_alive，即 /controller/is_alive
@@ -98,6 +107,47 @@ class ControllerNode(_BaseNode):
             f"已发布运动指令: linear_x={linear_x:.2f}, angular_z={angular_z:.2f}"
         )
 
+    # ── 急停 service 调用（供 EstopService 调用）──────────────────
+
+    async def trigger_estop(self):
+        """异步调用急停 service /g1/estop/trigger。
+
+        本方法封装 ROS service 调用的全部异步细节：
+        1. 等待 service 上线
+        2. call_async 发送请求，拿到 rclpy future
+        3. 在线程池里 spin_until_future_complete，不阻塞 event loop
+        4. 返回 Trigger.Response
+
+        满足 EstopTrigger 协议，service 通过依赖注入调用。
+        service 层直接 await 本方法，无需关心 rclpy future 细节。
+
+        Returns:
+            Trigger.Response 对象，含 success(bool) 和 message(string)。
+
+        Raises:
+            RuntimeError: rclpy 未安装或 service 不可用时抛出。
+        """
+        if not _RCLPY_AVAILABLE:
+            raise RuntimeError("rclpy 未安装，无法调用急停 service")
+
+        # 等待 service 上线（最多等 1 秒，避免无限阻塞）
+        if not self._estop_client.service_is_ready():
+            if not self._estop_client.wait_for_service(timeout_sec=1.0):
+                raise RuntimeError(f"急停 service 不可用: {ESTOP_SERVICE}")
+
+        # 异步调用，立即返回 rclpy future
+        req = Trigger.Request()
+        future = self._estop_client.call_async(req)
+        self.get_logger().warning("已发送急停请求")
+
+        # 在线程池里 spin 等待 future 完成，不阻塞 event loop
+        import asyncio
+        await asyncio.to_thread(
+            rclpy.spin_until_future_complete, self, future, timeout_sec=3.0
+        )
+
+        return future.result()
+
     # ── 存活检查 service 回调 ─────────────────────────────────────
 
     def _handle_is_alive(self, request, response) -> object:
@@ -124,12 +174,12 @@ class ControllerNode(_BaseNode):
     def is_alive(self) -> bool:
         """节点是否存活。
 
-        供健康检查路由 /api/v1/ros/status 调用。
-        context.is_valid() 在节点未销毁且 rclpy 仍 ok 时为 True。
+        供健康检查路由 /api/v1/alive 和 /api/v1/ros/status 调用。
+        rclpy.ok() 在 rclpy 初始化且未 shutdown 时为 True。
         """
         if not _RCLPY_AVAILABLE:
             return False
-        return bool(self.context.is_valid())
+        return bool(rclpy.ok())
 
 
 # ── ROS 生命周期函数（供 lifespan 调用）──────────────────────────
