@@ -53,6 +53,7 @@ start_container() {
         --restart unless-stopped \
         -v /opt/ros/humble:/opt/ros/humble:ro \
         -v /home/unitree/unitree_ros2_ws:/unitree_ws:ro \
+        -v /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro \
         -v "${PROJECT_DIR}/config/config.yaml:/app/config/config.yaml:ro" \
         -v "${LOG_DIR}:/app/logs" \
         -e ROS_DOMAIN_ID=0 \
