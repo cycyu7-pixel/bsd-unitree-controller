@@ -151,7 +151,8 @@ uv run pytest tests/ -v   # 16 个测试用例
 bsd-unitree-controller/
 ├── pyproject.toml              # 依赖声明（uv 管理）
 ├── main.py                     # 启动入口 + 模块级 app
-├── Dockerfile                  # 镜像构建（基于 osrf/ros:humble-ros-base）
+├── deploy.sh                   # Docker 一键部署脚本（构建+启动+开机自启）
+├── Dockerfile                  # 镜像构建（挂载机器人 ROS 环境）
 ├── docker-compose.yml          # 编排配置（host 网络 + volume 挂载）
 ├── .dockerignore
 ├── config/
@@ -465,18 +466,85 @@ Windows 开发机不需要装 rclpy，代码已做软依赖处理。
 
 ### 部署到机器人
 
-机器人环境（Ubuntu 22.04 + ROS Humble + Cyclone DDS），进程直跑：
+机器人环境（Ubuntu 22.04 + ROS Humble + Cyclone DDS），推荐用 Docker + deploy.sh 一键部署。
+
+#### 方式一：Docker 部署（推荐，开机自启）
+
+项目提供 `deploy.sh` 一键脚本，封装了构建、启动、日志挂载、开机自启。
 
 ```bash
 # 1. 拷代码到机器人
-scp -r bsd-unitree-controller/ unitree@机器人IP:~/
+git clone https://github.com/cycyu7-pixel/bsd-unitree-controller.git
+cd bsd-unitree-controller
 
-# 2. SSH 进机器人，装依赖
-ssh unitree@机器人IP
+# 2. 一键部署（构建镜像 + 启动容器 + 日志挂载 + 开机自启）
+chmod +x deploy.sh
+./deploy.sh
+```
+
+部署完成后：
+
+```bash
+# 看日志
+./deploy.sh logs
+
+# 看状态
+./deploy.sh status
+
+# 测试
+curl http://127.0.0.1:18800/api/v1/test
+ros2 node list | grep controller
+```
+
+**开机自启**：容器用 `--restart unless-stopped` 启动，机器人重启后自动恢复，无需额外配置。
+
+**日志挂载**：容器内 `/app/logs` 挂载到宿主机 `~/bsd-unitree-controller/logs/`，可直接查看：
+
+```bash
+# 宿主机直接看日志文件
+ls ~/bsd-unitree-controller/logs/
+cat ~/bsd-unitree-controller/logs/app_$(date +%Y-%m-%d).log
+```
+
+#### deploy.sh 命令一览
+
+| 命令 | 作用 |
+| --- | --- |
+| `./deploy.sh` | 构建镜像 + 启动容器（默认） |
+| `./deploy.sh rebuild` | 强制重新构建（无缓存）+ 启动 |
+| `./deploy.sh logs` | 查看日志（实时跟踪） |
+| `./deploy.sh stop` | 停止容器 |
+| `./deploy.sh start` | 启动已存在的容器 |
+| `./deploy.sh restart` | 重启容器 |
+| `./deploy.sh status` | 查看容器和镜像状态 |
+| `./deploy.sh clean` | 停止容器并删除容器+镜像 |
+
+#### 更新代码后重新部署
+
+```bash
+git pull
+./deploy.sh          # 自动重建镜像 + 重启容器
+```
+
+#### Docker 关键设计
+
+| 配置 | 值 | 原因 |
+| --- | --- | --- |
+| `--network host` | 必须用主机网络 | ROS 2 DDS 用多播发现节点，bridge 网络会导致容器内外节点互相看不见 |
+| `--restart unless-stopped` | 开机自启 | 机器人断电重启后容器自动恢复 |
+| 挂载 `/opt/ros/humble` | ROS 环境 | rclpy / std_srvs 来自系统，不装进镜像 |
+| 挂载 `/home/unitree/unitree_ros2_ws` | unitree 环境 | unitree_api 包来自 Unitree 工作空间 |
+| 挂载 `config.yaml` | 配置外挂 | 改配置不用重打镜像 |
+| 挂载 `logs/` | 日志外挂 | 宿主机可直接查看日志文件 |
+
+#### 方式二：进程直跑（开发调试用）
+
+```bash
+# 1. 装依赖
 cd ~/bsd-unitree-controller
-pip3 install -e .
+pip3 install -e . --user
 
-# 3. 启动（source ROS 环境 + unitree 工作空间 + DDS 配置）
+# 2. 启动（3 个 source + DDS 环境变量）
 source /opt/ros/humble/setup.bash
 source /home/unitree/unitree_ros2_ws/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
