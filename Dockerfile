@@ -39,8 +39,10 @@ WORKDIR /app
 COPY pyproject.toml ./
 
 # 装 Python 依赖
-# ubuntu:22.04 的 pip 较老，不支持 -e（editable/PEP 660），用普通安装
+# ubuntu:22.04 的 pip 较老，不支持 -e（editable/PEP 660）
+# 先显式装依赖，再装包本身（两步走，确保 dependencies 被装上）
 # rclpy / std_srvs / geometry_msgs / unitree_api 来自挂载的 ROS 环境，不通过 pip 装
+RUN pip3 install --no-cache-dir fastapi "uvicorn[standard]" httpx tenacity pydantic pyyaml loguru
 RUN pip3 install --no-cache-dir .
 
 # 拷源码
