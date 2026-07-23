@@ -56,10 +56,13 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 EXPOSE 18800
 
 # 启动命令：直接设全 PYTHONPATH 和 LD_LIBRARY_PATH，不依赖 source（容器内 source 经常失败）
-# PYTHONPATH 包含：ROS humble + unitree 工作空间（unitree_hg/unitree_go/unitree_api）
+# PYTHONPATH 包含：
+#   /app/src                    -> 项目源码（bsd_unitree_controller 包）
+#   /opt/ros/humble/...         -> rclpy / std_srvs / geometry_msgs
+#   /unitree_ws/install/...     -> unitree_hg / unitree_go / unitree_api
 # LD_LIBRARY_PATH 包含：ROS C 库 + 系统库（libspdlog 等 rclpy 依赖的 .so）
 CMD ["bash", "-c", \
     "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && \
-     export PYTHONPATH=/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_hg/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_go/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_api/local/lib/python3.10/dist-packages && \
+     export PYTHONPATH=/app/src:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_hg/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_go/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_api/local/lib/python3.10/dist-packages && \
      export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/lib/aarch64-linux-gnu && \
      python3 main.py"]
