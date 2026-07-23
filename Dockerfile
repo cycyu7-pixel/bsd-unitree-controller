@@ -38,9 +38,10 @@ WORKDIR /app
 # 先拷依赖声明，利用 Docker 缓存层
 COPY pyproject.toml ./
 
-# 装 Python 依赖（用 --no-deps 避免解析 rclpy，PyPI 上不可用）
-# rclpy / std_srvs / geometry_msgs / unitree_api 都来自挂载的 ROS 环境
-RUN pip3 install --no-cache-dir --no-deps -e .
+# 装 Python 依赖
+# ubuntu:22.04 的 pip 较老，不支持 -e（editable/PEP 660），用普通安装
+# rclpy / std_srvs / geometry_msgs / unitree_api 来自挂载的 ROS 环境，不通过 pip 装
+RUN pip3 install --no-cache-dir .
 
 # 拷源码
 COPY . .
