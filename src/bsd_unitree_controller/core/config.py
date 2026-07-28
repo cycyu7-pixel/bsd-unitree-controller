@@ -49,6 +49,18 @@ class UpstreamConfig(BaseModel):
     retry: int = 2       # 出站请求重试次数（不含首次）
 
 
+class AgvConfig(BaseModel):
+    """AGV 调度系统配置。
+
+    用于呼叫 AGV 小车到指定工位，并接收 AGV 到位回调。
+    base_url 拆分出来便于切换环境（测试/生产），path 和 workstation 跟着场景走。
+    """
+
+    base_url: str = "https://gwwms.bsdits.cn"   # AGV 调度系统基础地址
+    call_path: str = "/wcs/hikagv/callRobotComeByType"  # 呼叫 AGV 接口路径
+    workstation: str = "W03"                    # 工位号（AGV 要到的位置）
+
+
 class LogConfig(BaseModel):
     """日志配置。"""
 
@@ -75,6 +87,7 @@ class AppConfig(BaseModel):
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
     log: LogConfig = Field(default_factory=LogConfig)
     ros: RosConfig = Field(default_factory=RosConfig)
+    agv: AgvConfig = Field(default_factory=AgvConfig)
 
 
 # ── 加载逻辑 ────────────────────────────────────────────────────────

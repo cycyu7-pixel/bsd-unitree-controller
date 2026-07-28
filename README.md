@@ -2,21 +2,23 @@
 
 宇树 G1 机器人控制流程系统。对外提供 HTTP 接口（FastAPI），对内通过 ROS 2 节点与机器人其他节点通信。采用分层架构，HTTP 入口和 ROS 入口共享 service 层业务逻辑，零冗余。
 
+已部署到宇树 G1 机器人（unitree-g1-nx）并验证通过。
+
 ## 1. 这个项目做什么
 
-**一句话定位**：跑在宇树 G1 机器人本体上的控制流程系统，对外提供 HTTP 接口，对内通过 ROS 2 与运动控制、急停等节点通信。
+**一句话定位**：跑在宇树 G1 机器人本体上的控制流程系统，对外提供 HTTP 接口，对内通过 ROS 2 与急停等节点通信。
 
 **当前已实现**：
 - 规范的 FastAPI 分层骨架（启动、配置、异常、统一返回）
 - 带重试的 HTTP 客户端封装（httpx + tenacity）
 - ROS 2 节点封装（rclpy 软依赖，单进程双线程）
 - 存活检查：HTTP `/api/v1/alive` + ROS service `/controller/is_alive` 共享 HealthService
-- 运动控制：HTTP `/api/v1/motion/cmd` -> ROS topic `/cmd_vel`（topic publish 模式）
 - 急停控制：HTTP `/api/v1/estop/trigger` -> ROS service `/g1/estop/trigger`（service call 模式）
+- systemd 部署：开机自启 + 崩溃自动重启
 
 **不包含**：
 - 数据库、消息队列
-- 具体业务接口（任务管理、状态上报等，后续按需添加）
+- 运动控制、具体业务接口（后续按需添加）
 
 ## 2. 工作原理
 
@@ -27,13 +29,12 @@
                   │ HTTP
                   ▼
 ┌─────────────────────────────────────────────────┐
-│ 单进程                                            │
+│ 单进程（systemd 管理）                            │
 │  ┌──────────────────────────────┐                │
 │  │ uvicorn（主线程）             │                │
 │  │  FastAPI app                  │                │
 │  │   /api/v1/test    健康检查    │                │
 │  │   /api/v1/alive   存活检查    │ ← HTTP 接口    │
-│  │   /api/v1/motion/cmd 运动控制 │                │
 │  │   /api/v1/estop/trigger 急停  │                │
 │  └──────┬────────────┬───────────┘                │
 │         │ Depends    │ Depends                    │
@@ -43,7 +44,6 @@
 │  │ HttpClient │  │ rclpy.spin           │        │
 │  │ 出站 HTTP   │  │ (daemon 线程)        │        │
 │  └────────────┘  │ ControllerNode       │        │
-│                  │  /cmd_vel publisher  │        │
 │                  │  /g1/estop client    │        │
 │                  │  ~/is_alive server   │        │
 │                  └──────────┬───────────┘        │
@@ -96,54 +96,34 @@ HTTP  -> │ HTTP 入口   │         │ ROS 入口    │  ← 入口层薄�
 | 项 | 版本 | 说明 |
 | --- | --- | --- |
 | Python | >= 3.10 | 兼容 ROS Humble（3.10）和开发机（3.11+） |
-| uv | 任意版本 | 依赖管理 |
+| uv | 任意版本 | 开发机依赖管理 |
 | ROS Humble | 可选 | 部署到机器人需要，开发机不需要 |
 
-### 健康检查
-
-```bash
-curl http://127.0.0.1:18800/api/v1/test
-# 预期返回
-# {"code":1,"message":"success","data":{"status":"up"}}
-```
-
-### ROS 节点状态
-
-```bash
-curl http://127.0.0.1:18800/api/v1/ros/status
-# 机器人环境（rclpy 已装）
-# {"code":1,"data":{"status":"alive","node_name":"controller"}}
-# 开发机（rclpy 未装）
-# {"code":1,"data":{"status":"disabled","reason":"ROS 未启用..."}}
-```
-
-### 本地启动（开发机）
+### 开发机（无 ROS）
 
 ```bash
 # 安装依赖
 uv sync
 
-# 方式一：脚本启动
+# 启动（开发机无 rclpy，自动降级为纯 HTTP 模式）
 uv run python main.py
 
-# 方式二：uvicorn 直接引用模块级 app（支持 --reload 热重载）
+# 或用 uvicorn 热重载
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 18800
 ```
-
-开发机无 rclpy，自动降级为纯 HTTP 模式，ROS 相关接口返回 `code=50002`。
 
 ### 运行测试
 
 ```bash
-uv sync --extra dev       # 首次需装 dev 依赖
+uv sync --extra dev
 uv run pytest tests/ -v   # 16 个测试用例
 ```
 
-启动成功后访问接口文档：http://127.0.0.1:18800/docs
+启动后访问接口文档：http://127.0.0.1:18800/docs
 
-### 停止服务
+### 机器人部署
 
-`Ctrl+C` 终止 `uv run python main.py` 进程。
+见 [第 10 节 部署与运维](#10-部署与运维)。
 
 ## 4. 工程结构
 
@@ -151,10 +131,11 @@ uv run pytest tests/ -v   # 16 个测试用例
 bsd-unitree-controller/
 ├── pyproject.toml              # 依赖声明（uv 管理）
 ├── main.py                     # 启动入口 + 模块级 app
-├── deploy.sh                   # Docker 一键部署脚本（构建+启动+开机自启）
-├── Dockerfile                  # 镜像构建（挂载机器人 ROS 环境）
-├── docker-compose.yml          # 编排配置（host 网络 + volume 挂载）
-├── .dockerignore
+├── deploy.sh                   # 部署管理脚本（install/start/stop/logs）
+├── scripts/                    # 部署相关脚本
+│   ├── ros_env.sh              #   ROS 环境变量配置（source 用）
+│   ├── start.sh                #   启动脚本（systemd 调用）
+│   └── bsd-controller.service  #   systemd 服务配置（开机自启）
 ├── config/
 │   └── config.yaml             # 配置文件（类比 application.yml）
 ├── src/bsd_unitree_controller/
@@ -167,48 +148,41 @@ bsd-unitree-controller/
 │   │   ├── server.py           #   FastAPI app 装配 + lifespan（含 ROS 生命周期）
 │   │   └── v1/                 #   v1 版本路由
 │   │       ├── __init__.py     #     v1_router 汇总
-│   │       ├── health.py       #     健康检查 / 存活检查 / ROS 状态
-│   │       ├── motion.py       #     运动控制（topic publish 模式）
-│   │       └── estop.py        #     急停控制（service call 模式）
+│   │       └── controller.py   #     机器人本体控制（健康检查/存活/急停）
 │   ├── service/                # 业务逻辑层（@Service，不依赖框架）
-│   │   ├── health_service.py   #   存活检查业务逻辑
-│   │   ├── motion_service.py   #   运动控制业务逻辑
-│   │   └── estop_service.py    #   急停业务逻辑
+│   │   └── controller_service.py #  存活检查 + 急停业务逻辑
 │   ├── client/                 # 出站 HTTP（@FeignClient）
 │   │   └── http_client.py      #   httpx + tenacity 封装
 │   ├── ros/                    # 对内 ROS 通信（软依赖 rclpy）
 │   │   └── node.py             #   ControllerNode + 生命周期函数
 │   ├── model/                  # 数据模型
 │   │   ├── response.py         #   Result<T> / PageResult<T>
-│   │   ├── common.py           #   HealthVO 等通用 VO
-│   │   └── dto.py              #   MotionCmdDTO 等入参 DTO
+│   │   └── common.py           #   HealthVO 等通用 VO
 │   ├── exception/              # 业务异常 + 全局处理器
 │   │   ├── exceptions.py       #   BizException 等
 │   │   └── handlers.py         #   @ControllerAdvice
 │   └── utils/
 │       └── logging.py          # loguru 日志初始化
 └── tests/                      # 测试（pytest + TestClient）
-    ├── test_health.py
-    ├── test_motion.py
-    └── test_estop.py
+    └── test_controller.py
 ```
 
 | 路径 | 职责 |
 | --- | --- |
 | `main.py` | 启动入口，业务逻辑永远不写在这 |
+| `deploy.sh` | 部署管理（install/start/stop/restart/status/logs/uninstall） |
+| `scripts/ros_env.sh` | ROS 环境变量配置，source 后 rclpy/unitree_api 可用 |
+| `scripts/start.sh` | 启动脚本，systemd 调用它 |
+| `scripts/bsd-controller.service` | systemd 配置，开机自启 + 崩溃重启 |
 | `core/config.py` | 配置加载，yaml + 环境变量覆盖 |
 | `core/deps.py` | 公共依赖项，路由通过 `Depends` 取 |
 | `api/server.py` | 装配 app、lifespan 管理 HttpClient + ROS 生命周期 |
-| `api/v1/health.py` | 健康检查、存活检查、ROS 状态路由 |
-| `api/v1/motion.py` | 运动控制路由（topic publish 模式示例） |
-| `api/v1/estop.py` | 急停控制路由（service call 模式示例） |
-| `service/health_service.py` | 存活检查业务逻辑（HTTP + ROS 共享） |
-| `service/motion_service.py` | 运动控制业务逻辑（方向转速度 + 调 node） |
-| `service/estop_service.py` | 急停业务逻辑（await node service call） |
+| `api/v1/controller.py` | 机器人本体控制：健康检查、存活检查、ROS 状态、急停 |
+| `service/controller_service.py` | 存活检查 + 急停业务逻辑（HTTP + ROS 共享） |
 | `client/http_client.py` | 出站 HTTP 调用，通用 get/post |
-| `ros/node.py` | ControllerNode，含 publisher/service server/service client |
+| `ros/node.py` | ControllerNode，含 service server/service client |
 | `model/response.py` | `Result<T>` / `PageResult<T>` 统一返回 |
-| `model/dto.py` | 入参 DTO（MotionCmdDTO 等） |
+| `model/common.py` | HealthVO 等通用 VO |
 | `exception/exceptions.py` | 业务异常定义 |
 | `exception/handlers.py` | 全局异常处理器 |
 | `config/config.yaml` | 配置文件 |
@@ -307,34 +281,6 @@ curl http://127.0.0.1:18800/api/v1/ros/status
 {"code": 1, "data": {"status": "alive", "node_name": "controller"}}
 ```
 
-### `POST /api/v1/motion/cmd` - 运动控制（topic publish 模式）
-
-下发运动指令，经 service 层转成 ROS Twist，通过 `/cmd_vel` 发布。
-
-```bash
-# 前进
-curl -X POST http://127.0.0.1:18800/api/v1/motion/cmd \
-  -H "Content-Type: application/json" \
-  -d '{"direction":"forward","speed":0.5}'
-
-# 停止
-curl -X POST http://127.0.0.1:18800/api/v1/motion/cmd \
-  -H "Content-Type: application/json" \
-  -d '{"direction":"stop"}'
-```
-
-| direction | 说明 | speed 含义 |
-| --- | --- | --- |
-| `forward` | 前进 | 线速度 m/s |
-| `backward` | 后退 | 线速度 m/s |
-| `turn_left` | 左转 | 角速度 rad/s |
-| `turn_right` | 右转 | 角速度 rad/s |
-| `stop` | 停止 | 忽略 |
-
-```json
-{"code": 1, "data": {"direction": "forward", "speed": 0.5, "linear_x": 0.5, "angular_z": 0.0}}
-```
-
 ### `POST /api/v1/estop/trigger` - 急停控制（service call 模式）
 
 触发机器人急停，经 service 层调用 ROS service `/g1/estop/trigger`。
@@ -345,10 +291,6 @@ curl -X POST http://127.0.0.1:18800/api/v1/estop/trigger
 ```json
 {"code": 1, "data": {"success": true, "message": "..."}}
 ```
-
-### `GET /api/v1/baidu` - HTTP 封装验证
-
-通过 HttpClient 访问百度主页，验证出站 HTTP 封装可用。生产环境上线前移除。
 
 ### 错误码
 
@@ -362,7 +304,70 @@ curl -X POST http://127.0.0.1:18800/api/v1/estop/trigger
 | `50003` | ROS service 调用失败 |
 | `500` | 服务器内部错误 |
 
-## 7. HTTP 客户端封装
+## 7. ROS 接口
+
+机器人内部其他节点与本服务通信的 ROS 接口。
+
+### ControllerNode 注册的 ROS 接口
+
+| 类型 | 名称 | 消息类型 | 方向 | 用途 |
+| --- | --- | --- | --- | --- |
+| service | `/controller/is_alive` | `std_srvs/Trigger` | server | 存活检查 |
+| service | `/g1/estop/trigger` | `std_srvs/Trigger` | client | 急停控制 |
+
+### 调用方式
+
+```bash
+# source ROS 环境
+source ~/bsd-unitree-controller/scripts/ros_env.sh
+
+# 1. 查看节点
+ros2 node list | grep controller
+# -> /controller
+
+# 2. 调用存活检查 service
+ros2 service call /controller/is_alive std_srvs/srv/Trigger
+# -> success=True, message='alive|node=controller|ts=...'
+
+# 3. 查看节点注册的所有接口
+ros2 node info /controller
+```
+
+### 其他 ROS 节点调用本服务（Python 示例）
+
+```python
+import rclpy
+from rclpy.node import Node
+from std_srvs.srv import Trigger
+
+class CallerNode(Node):
+    def __init__(self):
+        super().__init__("caller")
+        # 创建 client，指向本服务的 is_alive service
+        self._client = self.create_client(Trigger, "/controller/is_alive")
+        self._client.wait_for_service()
+
+    def check_alive(self):
+        future = self._client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self, future)
+        return future.result().success  # True=活的
+```
+
+### ROS service 调用模式
+
+本项目的急停控制采用 ROS service call 模式（请求-响应）：
+
+| 项 | 说明 |
+| --- | --- |
+| ROS 通信方式 | service call（请求-响应） |
+| node 方法 | `trigger_estop()` async |
+| service 方法 | `execute_estop()` async |
+| 路由 | `async def` 异步 |
+| 等待方式 | `asyncio.to_thread` + `spin_until_future_complete`，不阻塞 event loop |
+
+后续若接入 topic publish 模式（如运动控制），node 方法用同步 `publish()`，路由用 `def`。
+
+## 8. HTTP 客户端封装
 
 `client/http_client.py` 是通用 HTTP 工具类，只提供 `get()` / `post()`，不写业务逻辑。
 
@@ -392,11 +397,29 @@ URL 必须传完整地址（带 `http(s)://`），业务代码自行硬编码各
 | 连接失败 / 超时 | ✅ | 重试 `upstream.retry` 次，指数退避 |
 | HTTP 4xx / 5xx | ❌ | 业务错误，不重试直接抛 `UpstreamException` |
 
-## 8. 日志查看
+## 9. 日志查看
 
-### 控制台日志
+### 实时日志
 
-启动后直接在终端看到，带颜色高亮。按天轮转，保留 30 天，位置 `logs/app_YYYY-MM-DD.log`。
+```bash
+# systemd 日志（实时跟踪）
+./deploy.sh logs
+
+# 或直接用 journalctl
+journalctl -u bsd-controller -f
+```
+
+### 日志文件
+
+按天轮转，保留 30 天，位置 `logs/app_YYYY-MM-DD.log`。
+
+```bash
+# 查看今天的日志
+cat ~/bsd-unitree-controller/logs/app_$(date +%Y-%m-%d).log
+
+# 查看错误
+grep "ERROR\|WARNING" ~/bsd-unitree-controller/logs/app_$(date +%Y-%m-%d).log
+```
 
 ### 关键日志含义
 
@@ -405,205 +428,106 @@ URL 必须传完整地址（带 `http(s)://`），业务代码自行硬编码各
 | `配置加载完成` | 启动成功读到配置 |
 | `ControllerNode 已启动` | ROS 节点初始化成功 |
 | `ROS 节点已启动，spin 在后台线程运行` | rclpy.spin daemon 线程已起 |
-| `运动控制 publisher 已注册` | `/cmd_vel` publisher 就绪 |
 | `急停 service client 已创建` | `/g1/estop/trigger` client 就绪 |
-| `已发布运动指令` | 运动指令已发到 `/cmd_vel` |
 | `已发送急停请求` | 急停 service 请求已发出 |
 | `rclpy 未安装，跳过 ROS 节点初始化` | 软依赖降级，纯 HTTP 模式 |
 | `业务异常` | 抛出 BizException |
 | `未捕获异常` | 出现未预期错误，查堆栈 |
 
-## 9. ROS 集成
+## 10. 部署与运维
 
-### 启动架构
+### 部署架构
 
-单进程双线程：FastAPI/uvicorn 跑主线程，`rclpy.spin` 跑后台 daemon 线程。
+采用**进程直跑 + systemd** 方案，不用 Docker。原因：rclpy 是 C 扩展，依赖大量系统级 `.so` 文件，Docker 挂载 ROS 环境依赖链过长；机器人已有完整 ROS 环境，进程直跑直接用，`pip3 install --user` 不污染系统。
 
-- HTTP 请求由 uvicorn 在主线程处理
-- ROS 消息回调由 `rclpy.spin` 在 daemon 线程触发
-- `rclpy.spin` 底层 C 库等待消息时释放 GIL，不阻塞主线程
-- 主进程退出时 daemon 线程自动结束，`lifespan` 关闭段清理 ROS 资源
+| 特性 | 实现方式 |
+| --- | --- |
+| 环境隔离 | `pip3 install --user`，依赖装到 `~/.local/`，不碰系统目录 |
+| 开机自启 | systemd `enable`，机器人重启自动恢复 |
+| 崩溃重启 | systemd `Restart=always`，5 秒后自动重启 |
+| 日志管理 | systemd journal + 文件日志双写 |
 
-### 软依赖（rclpy）
-
-`rclpy` 作为软依赖，Windows 开发机不装也能跑：
-
-| 环境 | rclpy | 行为 |
-| --- | --- | --- |
-| Windows 开发机 | 未装 | 纯 HTTP 模式，ROS 接口返回 `code=50002` |
-| 机器人（Ubuntu + ROS Humble） | 已装 | ROS 自动启用，节点注册到 ROS 网络 |
-
-### ControllerNode 注册的 ROS 接口
-
-| 类型 | 名称 | 消息类型 | 方向 | 用途 |
-| --- | --- | --- | --- | --- |
-| topic | `/cmd_vel` | `geometry_msgs/Twist` | publisher | 运动控制指令 |
-| service | `/controller/is_alive` | `std_srvs/Trigger` | server | 存活检查 |
-| service | `/g1/estop/trigger` | `std_srvs/Trigger` | client | 急停控制 |
-
-### 安装 rclpy
-
-不能 `pip install rclpy`，必须走 ROS 发行版安装：
+### 首次部署
 
 ```bash
-sudo apt install ros-humble-rclpy
-source /opt/ros/humble/setup.bash
-```
-
-Windows 开发机不需要装 rclpy，代码已做软依赖处理。
-
-### 两种 ROS 通信模式对照
-
-本项目演示了 ROS 两种通信模式的完整写法：
-
-| 项 | 运动控制（motion） | 急停（estop） |
-| --- | --- | --- |
-| ROS 通信方式 | topic publish | service call |
-| node 方法 | `publish_cmd()` 同步 | `trigger_estop()` async |
-| service 方法 | `execute_cmd()` 同步 | `execute_estop()` async |
-| 路由 | `def` 同步 | `async def` 异步 |
-| 等待方式 | 不等待（fire-and-forget） | `asyncio.to_thread` + `spin_until_future_complete` |
-
-### 部署到机器人
-
-机器人环境（Ubuntu 22.04 + ROS Humble + Cyclone DDS），推荐用 Docker + deploy.sh 一键部署。
-
-#### 方式一：Docker 部署（推荐，开机自启）
-
-项目提供 `deploy.sh` 一键脚本，封装了构建、启动、日志挂载、开机自启。
-
-```bash
-# 1. 拷代码到机器人
+# 1. 拉代码
+cd ~
 git clone https://github.com/cycyu7-pixel/bsd-unitree-controller.git
 cd bsd-unitree-controller
 
-# 2. 一键部署（构建镜像 + 启动容器 + 日志挂载 + 开机自启）
-chmod +x deploy.sh
-./deploy.sh
+# 2. 一键部署（装依赖 + 注册 systemd + 启动）
+chmod +x deploy.sh scripts/*.sh
+./deploy.sh install
 ```
 
-部署完成后：
-
-```bash
-# 看日志
-./deploy.sh logs
-
-# 看状态
-./deploy.sh status
-
-# 测试
-curl http://127.0.0.1:18800/api/v1/test
-ros2 node list | grep controller
-```
-
-**开机自启**：容器用 `--restart unless-stopped` 启动，机器人重启后自动恢复，无需额外配置。
-
-**日志挂载**：容器内 `/app/logs` 挂载到宿主机 `~/bsd-unitree-controller/logs/`，可直接查看：
-
-```bash
-# 宿主机直接看日志文件
-ls ~/bsd-unitree-controller/logs/
-cat ~/bsd-unitree-controller/logs/app_$(date +%Y-%m-%d).log
-```
-
-#### deploy.sh 命令一览
-
-| 命令 | 作用 |
-| --- | --- |
-| `./deploy.sh` | 构建镜像 + 启动容器（默认） |
-| `./deploy.sh rebuild` | 强制重新构建（无缓存）+ 启动 |
-| `./deploy.sh logs` | 查看日志（实时跟踪） |
-| `./deploy.sh stop` | 停止容器 |
-| `./deploy.sh start` | 启动已存在的容器 |
-| `./deploy.sh restart` | 重启容器 |
-| `./deploy.sh status` | 查看容器和镜像状态 |
-| `./deploy.sh clean` | 停止容器并删除容器+镜像 |
-
-#### 更新代码后重新部署
-
-```bash
-git pull
-./deploy.sh          # 自动重建镜像 + 重启容器
-```
-
-#### Docker 关键设计
-
-| 配置 | 值 | 原因 |
-| --- | --- | --- |
-| `--network host` | 必须用主机网络 | ROS 2 DDS 用多播发现节点，bridge 网络会导致容器内外节点互相看不见 |
-| `--restart unless-stopped` | 开机自启 | 机器人断电重启后容器自动恢复 |
-| 挂载 `/opt/ros/humble` | ROS 环境 | rclpy / std_srvs 来自系统，不装进镜像 |
-| 挂载 `/home/unitree/unitree_ros2_ws` | unitree 环境 | unitree_api 包来自 Unitree 工作空间 |
-| 挂载 `config.yaml` | 配置外挂 | 改配置不用重打镜像 |
-| 挂载 `logs/` | 日志外挂 | 宿主机可直接查看日志文件 |
-
-#### 方式二：进程直跑（开发调试用）
-
-```bash
-# 1. 装依赖
-cd ~/bsd-unitree-controller
-pip3 install -e . --user
-
-# 2. 启动（3 个 source + DDS 环境变量）
-source /opt/ros/humble/setup.bash
-source /home/unitree/unitree_ros2_ws/install/setup.bash
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-python3 main.py
-```
-
-启动后期望日志：
-```
-ControllerNode 已启动: controller
-运动控制 publisher 已注册: /cmd_vel
-急停 service client 已创建: /g1/estop/trigger
-ROS service 已注册: ~/is_alive
-ROS 节点已启动，spin 在后台线程运行
-启动 uvicorn，监听 0.0.0.0:18800
-```
+`install` 会自动完成 4 步：
+1. `pip3 install --user` 装依赖（不污染系统环境）
+2. 修脚本换行符 + 设执行权限
+3. 注册 systemd 服务 + 设开机自启
+4. 启动服务
 
 ### 部署后验证
 
 ```bash
-# 1. ROS 节点注册成功
-ros2 node list                    # 看到 /controller
-ros2 node info /controller        # 看 publisher/service 列表
+# 1. 服务状态
+./deploy.sh status
+# 期望：active (running) + 18800 端口监听
 
 # 2. HTTP 接口
 curl http://127.0.0.1:18800/api/v1/test
 curl http://127.0.0.1:18800/api/v1/ros/status    # status=alive
 
-# 3. ROS service 测试（验证 ROS 链路）
-ros2 service call /controller/is_alive std_srvs/srv/Trigger
-# 期望 success=True
-
-# 4. 急停测试
-ros2 service call /g1/estop/trigger std_srvs/srv/Trigger
-curl -X POST http://127.0.0.1:18800/api/v1/estop/trigger
+# 3. ROS 节点（另开终端）
+source ~/bsd-unitree-controller/scripts/ros_env.sh
+ros2 node list | grep controller                 # -> /controller
+ros2 service call /controller/is_alive std_srvs/srv/Trigger  # -> success=True
 ```
 
-## 10. 部署与运维
+### deploy.sh 命令一览
 
-### 方式一：进程直跑（机器人内部推荐）
+| 命令 | 作用 |
+| --- | --- |
+| `./deploy.sh install` | 装依赖 + 注册 systemd 服务 + 启动（首次部署用） |
+| `./deploy.sh start` | 启动服务 |
+| `./deploy.sh stop` | 停止服务 |
+| `./deploy.sh restart` | 重启服务 |
+| `./deploy.sh status` | 查看服务状态 + 端口监听 |
+| `./deploy.sh logs` | 查看日志（实时跟踪） |
+| `./deploy.sh uninstall` | 卸载 systemd 服务 |
 
-机器人已有 ROS 环境，进程直跑最简单，见上一节"部署到机器人"。
-
-### 方式二：Docker 部署
+### 更新代码
 
 ```bash
-docker compose build
-docker compose up -d
-docker compose logs -f
-docker compose down
+cd ~/bsd-unitree-controller
+git pull
+./deploy.sh restart
 ```
 
-关键配置：`network_mode: host`（ROS DDS 必须）、`ROS_DOMAIN_ID` 跟其他节点一致。
+### 卸载（恢复机器人原样）
+
+```bash
+./deploy.sh uninstall                          # 移除 systemd 服务
+pip3 uninstall bsd-unitree-controller fastapi uvicorn httpx tenacity loguru pydantic pyyaml
+rm -rf ~/bsd-unitree-controller                # 删除项目目录
+```
+
+卸载后机器人恢复原样，不影响 ROS 环境和其他节点。
+
+### 开发机部署（无 ROS）
+
+开发机无 rclpy，自动降级为纯 HTTP 模式，ROS 相关接口返回 `code=50002`。
+
+```bash
+uv sync
+uv run python main.py
+```
 
 ## 11. 改代码后怎么上线
 
 | 改动类型 | 是否需要重装依赖 | 是否需要重启 |
 | --- | --- | --- |
-| Python 代码 | ❌ | ✅ |
-| `pyproject.toml` 加依赖 | ✅ | ✅ |
+| Python 代码 | ❌ | ✅（`./deploy.sh restart`） |
+| `pyproject.toml` 加依赖 | ✅（`./deploy.sh install`） | ✅ |
 | `config.yaml` 配置 | ❌ | ✅ |
 | README 文档 | ❌ | ❌ |
 
@@ -613,13 +537,13 @@ docker compose down
 
 | 想做的事 | 推荐位置 | 注意事项 |
 | --- | --- | --- |
-| 加新 HTTP 接口 | `api/v1/` 下新建模块，在 `api/v1/__init__.py` 汇总 | 只调 service，不写业务 |
-| 写业务逻辑 | `service/` 下新建文件 | 不 import fastapi/httpx/rclpy |
-| 加 ROS publisher/subscriber | `ros/node.py` 的 `ControllerNode.__init__` | topic 模式，参考 `publish_cmd` |
+| 加新 HTTP 接口 | `api/v1/controller.py` 加路由，或新建模块在 `api/v1/__init__.py` 汇总 | 只调 service，不写业务 |
+| 写业务逻辑 | `service/controller_service.py` 加类，或新建 service 文件 | 不 import fastapi/httpx/rclpy |
+| 加 ROS publisher/subscriber | `ros/node.py` 的 `ControllerNode.__init__` | topic 模式，同步 publish |
 | 加 ROS service client | `ros/node.py` 的 `ControllerNode` | service call 模式，参考 `trigger_estop` |
 | 加 ROS service server | `ros/node.py` 的 `ControllerNode.__init__` | 参考 `~/is_alive` |
 | 调外部 HTTP | `client/http_client.py` 已提供 `get`/`post` | 传完整 URL |
-| 加新数据结构 | `model/` 下：入参 `dto.py`，出参 `common.py` 或新文件 | 用 Pydantic |
+| 加新数据结构 | `model/` 下：入参新建 `dto.py`，出参 `common.py` 或新文件 | 用 Pydantic |
 | 加新业务异常 | `exception/exceptions.py` 加类 | 继承 `BizException` |
 | 改端口/ROS 开关 | `config/config.yaml` 或环境变量 | 改完重启 |
 
@@ -637,11 +561,19 @@ docker compose down
 
 ### 服务起不来
 
-```text
-Error: [Errno 10048] 正常情况下无法将套接字绑定到本地地址
+```bash
+./deploy.sh status
+./deploy.sh logs
 ```
 
-端口被占用：`netstat -ano | findstr :18800`（Windows）或 `ss -tlnp | grep 18800`（Linux）。
+常见原因：
+
+| 报错 | 原因 | 解决 |
+| --- | --- | --- |
+| `PermissionError: logs/` | logs 目录权限不对 | `sudo chown -R unitree:unitree ~/bsd-unitree-controller/logs` |
+| `No module named 'fastapi'` | 没装依赖 | `./deploy.sh install` |
+| `port is already allocated` | 18800 被占 | `ss -tlnp | grep 18800` 查并 kill |
+| pip 报 SOCKS 错误 | 代理干扰 | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY` |
 
 ### ROS 节点看不到 /controller
 
@@ -650,16 +582,20 @@ ros2 node list | grep controller
 ```
 
 如果看不到，检查：
-1. 启动日志是否有 `ControllerNode 已启动`
-2. `RMW_IMPLEMENTATION` 是否跟其他节点一致（`rmw_cyclonedds_cpp`）
-3. `ROS_DOMAIN_ID` 是否跟其他节点一致（默认 0）
-4. 是否 source 了 ROS 环境
+
+1. 启动日志是否有 `ControllerNode 已启动`：`./deploy.sh logs`
+2. 是否 source 了 ROS 环境：`source ~/bsd-unitree-controller/scripts/ros_env.sh`
+3. DDS 是否一致：`echo $RMW_IMPLEMENTATION`（应为 `rmw_cyclonedds_cpp`）
+4. `ROS_DOMAIN_ID` 是否跟其他节点一致（默认 0）
 
 ### ROS service 调用超时
 
-急停 `/g1/estop/trigger` 调用超时，检查：
-1. service 是否在线：`ros2 service list | grep estop`
-2. service 类型是否匹配：`ros2 service type /g1/estop/trigger`
+```bash
+# service 是否注册
+ros2 service list | grep is_alive
+# service 类型
+ros2 service type /controller/is_alive
+```
 
 ### 开发机 ROS 接口返回 50002
 
@@ -694,6 +630,8 @@ ros2 node list | grep controller
 | `model/dto.py` | DTO | 入参结构 |
 | `exception/exceptions.py` | `BusinessException` | 业务异常 |
 | `exception/handlers.py` | `@ControllerAdvice` | 全局异常处理 |
+| `deploy.sh` | 部署脚本 | systemd 服务管理 |
+| `scripts/bsd-controller.service` | systemd service | 开机自启 + 崩溃重启 |
 
 ---
 
@@ -702,6 +640,7 @@ ros2 node list | grep controller
 | 项目名 | `bsd-unitree-controller` |
 | 仓库地址 | https://github.com/cycyu7-pixel/bsd-unitree-controller |
 | 业务方/所属团队 | bsd-wl 开发团队 |
-| 技术栈 | Python 3.10/3.11 + FastAPI + httpx + tenacity + Pydantic + loguru + rclpy（软依赖） |
+| 技术栈 | Python 3.10 + FastAPI + httpx + tenacity + Pydantic + loguru + rclpy（软依赖） |
 | 部署环境 | 宇树 G1 机器人（Ubuntu 22.04 + ROS Humble + Cyclone DDS） |
+| 部署方式 | 进程直跑 + systemd（开机自启 + 崩溃重启） |
 | README 维护建议 | 代码、配置、接口或部署方式变化时同步更新 |

@@ -7,12 +7,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from bsd_unitree_controller.api.v1.estop import router as estop_router
-from bsd_unitree_controller.api.v1.health import router as health_router
-from bsd_unitree_controller.api.v1.motion import router as motion_router
+from bsd_unitree_controller.api.v1.agv import router as agv_router
+from bsd_unitree_controller.api.v1.controller import router as controller_router
 
 # v1 版本总路由，不在这里加 prefix，由上层 api_router 统一加 /api/v1
 v1_router = APIRouter()
-v1_router.include_router(health_router)
-v1_router.include_router(motion_router)
-v1_router.include_router(estop_router)
+v1_router.include_router(controller_router)
+v1_router.include_router(agv_router)

@@ -38,3 +38,10 @@ log:
 ros:
   enabled: true              # 是否启用 ROS 节点
   node_name: "controller"    # ROS 节点名（ros2 node list 里显示的名字）
+
+# ── AGV 调度系统配置 ──
+# 呼叫 AGV 小车到指定工位，接收 AGV 到位回调
+agv:
+  base_url: "https://gwwms.bsdits.cn"               # AGV 调度系统基础地址
+  call_path: "/wcs/hikagv/callRobotComeByType"      # 呼叫 AGV 接口路径
+  workstation: "W03"                                 # 工位号（AGV 要到的位置）

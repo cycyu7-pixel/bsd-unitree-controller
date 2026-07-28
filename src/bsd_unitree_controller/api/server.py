@@ -55,7 +55,12 @@ def _build_lifespan(config: AppConfig):
         app.state.ros_spin_thread = None
         if config.ros.enabled and is_ros_available():
             try:
-                app.state.ros_node = init_ros(config.ros.node_name)
+                # 传入 http_client 和 agv_config，让节点能注册 ~/call_agv service
+                app.state.ros_node = init_ros(
+                    config.ros.node_name,
+                    http_client=http_client,
+                    agv_config=config.agv,
+                )
                 if app.state.ros_node is not None:
                     app.state.ros_spin_thread = spin_in_thread(app.state.ros_node)
                     logger.info("ROS 节点已启动，spin 在后台线程运行: {}",

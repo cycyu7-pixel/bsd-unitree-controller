@@ -18,7 +18,6 @@ try:
     import rclpy
     from rclpy.node import Node
     from std_srvs.srv import Trigger
-    from geometry_msgs.msg import Twist
 
     _RCLPY_AVAILABLE: bool = True
     _BaseNode = Node
@@ -31,9 +30,6 @@ except ImportError:
 
         pass
 
-
-# /cmd_vel 是 ROS 生态通用的运动控制话题名，大多数底盘节点默认订阅
-CMD_VEL_TOPIC = "/cmd_vel"
 
 # G1 急停 service 名（std_srvs/Trigger 类型）
 ESTOP_SERVICE = "/g1/estop/trigger"
@@ -51,22 +47,25 @@ class ControllerNode(_BaseNode):
     当前骨架阶段硬编码默认值为 "controller"。
     """
 
-    def __init__(self, node_name: str = "controller") -> None:
+    def __init__(
+        self,
+        node_name: str = "controller",
+        http_client=None,
+        agv_config=None,
+    ) -> None:
         """初始化节点。
 
         Args:
             node_name: ROS 节点名，默认 "controller"。
+            http_client: HttpClient 实例，供 AgvService 调用外部 HTTP 接口。
+                        None 时不注册 AGV service。
+            agv_config: AgvConfig 实例，AGV 调度配置。
+                        None 时不注册 AGV service。
         """
         if not _RCLPY_AVAILABLE:
             raise RuntimeError("rclpy 未安装，无法创建 ROS 节点")
         super().__init__(node_name)
         self.get_logger().info(f"ControllerNode 已启动: {node_name}")
-
-        # ── 运动控制 publisher：发布 Twist 到 /cmd_vel ──────────────
-        # 运动控制节点（底盘）订阅 /cmd_vel，收到 Twist 后驱动电机
-        # queue_size=10 表示缓冲 10 条指令，超出丢弃旧的
-        self._cmd_pub = self.create_publisher(Twist, CMD_VEL_TOPIC, 10)
-        self.get_logger().info(f"运动控制 publisher 已注册: {CMD_VEL_TOPIC}")
 
         # ── 急停 service client：调用 /g1/estop/trigger ─────────────
         # G1 的急停是 ROS service（std_srvs/Trigger），不是 topic
@@ -74,38 +73,26 @@ class ControllerNode(_BaseNode):
         self._estop_client = self.create_client(Trigger, ESTOP_SERVICE)
         self.get_logger().info(f"急停 service client 已创建: {ESTOP_SERVICE}")
 
-        # ── 注册 ROS service：其他节点可通过 ros2 service call 调用 ──
-        # ~/is_alive 会解析成 /<node_name>/is_alive，即 /controller/is_alive
-        # 用 std_srvs/Trigger（ROS 自带），请求空，返回 success + message
+        # ── 存活检查 service：~/is_alive ───────────────────────────
         # 业务逻辑调 HealthService，与 HTTP /api/v1/alive 共享同一份逻辑
-        from bsd_unitree_controller.service.health_service import HealthService
+        from bsd_unitree_controller.service.controller_service import HealthService
 
         self._health_service = HealthService(provider=self)
         self.create_service(Trigger, "~/is_alive", self._handle_is_alive)
         self.get_logger().info("ROS service 已注册: ~/is_alive")
 
-    # ── 运动指令发布（供 MotionService 调用）──────────────────────
+        # ── 呼叫 AGV service：~/call_agv ───────────────────────────
+        # 业务逻辑调 AgvService，与 HTTP /api/v1/agv/call 共享同一份逻辑
+        # 需要 http_client 和 agv_config，缺任一则不注册
+        if http_client is not None and agv_config is not None:
+            from bsd_unitree_controller.service.agv_service import AgvService
 
-    def publish_cmd(self, linear_x: float, angular_z: float) -> None:
-        """发布运动指令到 /cmd_vel。
-
-        本方法只做 ROS 通信：构造 Twist 消息并 publish。
-        业务逻辑（方向->速度的转换）在 MotionService 层，本方法不参与。
-        满足 MotionPublisher 协议，service 通过依赖注入调用。
-
-        Args:
-            linear_x: 线速度 m/s，正=前进，负=后退。
-            angular_z: 角速度 rad/s，正=左转，负=右转。
-        """
-        if not _RCLPY_AVAILABLE:
-            raise RuntimeError("rclpy 未安装，无法发布运动指令")
-        msg = Twist()
-        msg.linear.x = linear_x
-        msg.angular.z = angular_z
-        self._cmd_pub.publish(msg)
-        self.get_logger().info(
-            f"已发布运动指令: linear_x={linear_x:.2f}, angular_z={angular_z:.2f}"
-        )
+            self._agv_service = AgvService(config=agv_config, http_client=http_client)
+            self.create_service(Trigger, "~/call_agv", self._handle_call_agv)
+            self.get_logger().info("ROS service 已注册: ~/call_agv")
+        else:
+            self._agv_service = None
+            self.get_logger().warning("http_client 或 agv_config 未提供，跳过 ~/call_agv 注册")
 
     # ── 急停 service 调用（供 EstopService 调用）──────────────────
 
@@ -170,6 +157,36 @@ class ControllerNode(_BaseNode):
         response.message = f"{data['status']}|node={data['node_name']}|ts={data['timestamp']}"
         return response
 
+    def _handle_call_agv(self, request, response) -> object:
+        """ROS service 回调：处理 ~/call_agv 调用。
+
+        本方法只做翻译：调 AgvService 拿业务结果，转成 ROS 消息字段。
+        业务逻辑在 service 层，与 HTTP /api/v1/agv/call 共享，无冗余。
+        workstation 从配置读取，不需要请求参数。
+
+        Args:
+            request: Trigger.Request，无字段。
+            response: Trigger.Response，含 success(bool) 和 message(string)。
+
+        Returns:
+            填充后的 response。
+        """
+        if self._agv_service is None:
+            response.success = False
+            response.message = "AGV service 未启用（缺少 http_client 或 agv_config）"
+            return response
+
+        try:
+            # 调 service 层，与 HTTP /api/v1/agv/call 调同一个方法
+            data = self._agv_service.call_agv()
+            response.success = True
+            response.message = f"AGV 呼叫成功|workstation={data['workstation']}"
+        except Exception as exc:
+            # AgvService 抛 UpstreamException 等，转成 ROS service 失败响应
+            response.success = False
+            response.message = f"AGV 呼叫失败: {exc}"
+        return response
+
     @property
     def is_alive(self) -> bool:
         """节点是否存活。
@@ -193,7 +210,11 @@ def is_ros_available() -> bool:
     return _RCLPY_AVAILABLE
 
 
-def init_ros(node_name: str = "controller") -> Optional[ControllerNode]:
+def init_ros(
+    node_name: str = "controller",
+    http_client=None,
+    agv_config=None,
+) -> Optional[ControllerNode]:
     """初始化 ROS 并返回节点实例。
 
     rclpy 未安装时返回 None，调用方据此决定是否启用 ROS 功能。
@@ -201,6 +222,8 @@ def init_ros(node_name: str = "controller") -> Optional[ControllerNode]:
 
     Args:
         node_name: ROS 节点名。
+        http_client: HttpClient 实例，传给 ControllerNode 供 AgvService 使用。
+        agv_config: AgvConfig 实例，传给 ControllerNode 供 AgvService 使用。
 
     Returns:
         ControllerNode 实例，或 None（rclpy 未装）。
@@ -208,7 +231,7 @@ def init_ros(node_name: str = "controller") -> Optional[ControllerNode]:
     if not _RCLPY_AVAILABLE:
         return None
     rclpy.init()
-    return ControllerNode(node_name)
+    return ControllerNode(node_name, http_client=http_client, agv_config=agv_config)
 
 
 def shutdown_ros(node: Optional[ControllerNode]) -> None:
