@@ -26,17 +26,25 @@ RUN pip3 install --no-cache-dir \
 # 工作目录
 WORKDIR /app
 
-# 先拷依赖声明，利用 Docker 缓存层（改代码不重装依赖）
-COPY pyproject.toml ./
-
-# 装项目本身（非 editable，ubuntu:22.04 的 pip 不支持 PEP 660）
-RUN pip3 install --no-cache-dir .
-
-# 拷源码
+# 拷全部源码（pip install . 需要 src 目录存在，不能分步拷）
 COPY . .
 
+# 装 Python Web 依赖（rclpy/std_srvs 等来自基础镜像的 ROS，不通过 pip 装）
+RUN pip3 install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    httpx \
+    tenacity \
+    pydantic \
+    pyyaml \
+    loguru
+
+# 装项目本身（非 editable，src 目录已拷进来）
+RUN pip3 install --no-cache-dir .
+
 # 设 PYTHONPATH 让 Python 找到项目源码（src 布局）
-ENV PYTHONPATH="/app/src:${PYTHONPATH}"
+# 用硬编码字符串，不用 ${PYTHONPATH}（构建阶段该变量未定义会报警告）
+ENV PYTHONPATH="/app/src"
 
 # 时区
 ENV TZ=Asia/Shanghai
