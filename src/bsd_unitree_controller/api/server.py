@@ -76,6 +76,10 @@ def _build_lifespan(config: AppConfig):
             # config.ros.enabled=true 但 rclpy 未装
             logger.warning("rclpy 未安装，跳过 ROS 节点初始化（纯 HTTP 模式）")
 
+        # 服务启动成功，打印访问地址
+        port = config.server.port
+        logger.info("服务启动成功，接口文档地址: http://127.0.0.1:{}/docs", port)
+
         yield
 
         # ── 关闭段 ──────────────────────────────────────────────

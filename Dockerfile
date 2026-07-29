@@ -1,68 +1,58 @@
 # ====================================================================
 # bsd-unitree-controller Dockerfile
 #
-# 部署到宇树 G1 机器人（unitree-g1-nx，Ubuntu 22.04 + ROS Humble）。
+# 部署到宇树 G1 机器人（unitree-g1-nx，Jetson + ROS Humble）。
 #
-# 关键设计：用 ubuntu:22.04 基础镜像（跟机器人系统一致），
-# 运行时挂载机器人的 ROS 环境（rclpy + unitree_api + C 库依赖）。
-# 不把 ROS 装进镜像，因为 rclpy 是 C 扩展，依赖大量系统级 .so 文件，
-# 挂载方式最稳，避免 .so 版本不匹配。
+# 关键设计：用机器人上已有的 isaac_ros_dev-aarch64 镜像做基础，
+# 它自带完整的 ROS Humble + 所有 C 库依赖（rclpy 的 .so 等），
+# 解决了之前 python:3.10-slim 缺 C 库导致 rclpy import 失败的问题。
 #
-# 镜像只装 Python 包（fastapi/httpx/tenacity 等），
-# ROS 相关包通过 docker-compose 挂载进来。
+# 镜像里没有 unitree_api（Unitree 自己编译的包），通过 docker run
+# 挂载机器人的 unitree_ros2_ws 工作空间进来。
 # ====================================================================
-FROM ubuntu:22.04
+FROM isaac_ros_dev-aarch64
 
-# 避免交互式安装卡住
-ENV DEBIAN_FRONTEND=noninteractive
-
-# 装系统依赖：Python 3 + 运行时 C 库 + curl
-# libspdlog-dev 等 ROS 依赖通过挂载宿主机获得，不在这里装
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 \
-        python3-pip \
-        python3-yaml \
-        curl \
-        ca-certificates \
-        locales \
-    && rm -rf /var/lib/apt/lists/*
-
-# 设中文 locale（避免日志中文乱码）
-RUN locale-gen zh_CN.UTF-8
-ENV LANG=zh_CN.UTF-8
-ENV LC_ALL=zh_CN.UTF-8
+# 装 Python Web 依赖（rclpy/std_srvs 等来自基础镜像的 ROS，不通过 pip 装）
+# 用 --no-cache-dir 减小镜像体积
+RUN pip3 install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    httpx \
+    tenacity \
+    pydantic \
+    pyyaml \
+    loguru
 
 # 工作目录
 WORKDIR /app
 
-# 先拷依赖声明，利用 Docker 缓存层
+# 先拷依赖声明，利用 Docker 缓存层（改代码不重装依赖）
 COPY pyproject.toml ./
 
-# 装 Python 依赖
-# ubuntu:22.04 的 pip 较老，不支持 -e（editable/PEP 660）
-# 先显式装依赖，再装包本身（两步走，确保 dependencies 被装上）
-# rclpy / std_srvs / geometry_msgs / unitree_api 来自挂载的 ROS 环境，不通过 pip 装
-RUN pip3 install --no-cache-dir fastapi "uvicorn[standard]" httpx tenacity pydantic pyyaml loguru
+# 装项目本身（非 editable，ubuntu:22.04 的 pip 不支持 PEP 660）
 RUN pip3 install --no-cache-dir .
 
 # 拷源码
 COPY . .
 
+# 设 PYTHONPATH 让 Python 找到项目源码（src 布局）
+ENV PYTHONPATH="/app/src:${PYTHONPATH}"
+
 # 时区
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 暴露 FastAPI 端口
+# 暴露 FastAPI 端口（host 网络模式下仅文档作用）
 EXPOSE 18800
 
-# 启动命令：直接设全 PYTHONPATH 和 LD_LIBRARY_PATH，不依赖 source（容器内 source 经常失败）
-# PYTHONPATH 包含：
-#   /app/src                    -> 项目源码（bsd_unitree_controller 包）
-#   /opt/ros/humble/...         -> rclpy / std_srvs / geometry_msgs
-#   /unitree_ws/install/...     -> unitree_hg / unitree_go / unitree_api
-# LD_LIBRARY_PATH 包含：ROS C 库 + 系统库（libspdlog 等 rclpy 依赖的 .so）
+# 启动命令：
+# 1. source ROS Humble（让 rclpy/std_srvs 可用）
+# 2. source 挂载进来的 unitree 工作空间（让 unitree_api 可用）
+# 3. 设 DDS 中间件为 Cyclone DDS（跟机器人其他节点一致）
+# 4. 启动服务
 CMD ["bash", "-c", \
-    "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && \
-     export PYTHONPATH=/app/src:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_hg/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_go/local/lib/python3.10/dist-packages:/unitree_ws/install/unitree_api/local/lib/python3.10/dist-packages && \
-     export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/lib/aarch64-linux-gnu && \
+    "source /opt/ros/humble/setup.bash && \
+     source /unitree_ws/install/setup.bash && \
+     export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && \
+     export ROS_DOMAIN_ID=0 && \
      python3 main.py"]
