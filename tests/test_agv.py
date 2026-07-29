@@ -13,7 +13,10 @@ from bsd_unitree_controller.core.config import AgvConfig
 from bsd_unitree_controller.exception.exceptions import UpstreamException
 from bsd_unitree_controller.service.agv_service import AgvService
 
-from main import app
+from bsd_unitree_controller.api.server import create_app
+from bsd_unitree_controller.core.config import load_config
+
+app = create_app(load_config())
 
 
 # ── service 层测试 ─────────────────────────────────────────────

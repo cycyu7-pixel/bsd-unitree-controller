@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<!--
+  bsd_unitree_controller ROS package 描述文件。
+
+  声明 ROS 依赖，colcon build 时会检查。
+  pip 依赖（fastapi/uvicorn 等）在 setup.py 里声明。
+-->
+<package format="3">
+  <name>bsd_unitree_controller</name>
+  <version>0.2.0</version>
+  <description>宇树 G1 机器人控制流程系统（FastAPI + ROS 2 节点）</description>
+  <maintainer email="cyu@bsdits.com">cyu</maintainer>
+  <license>MIT</license>
+
+  <!-- 构建工具 -->
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- ROS 运行时依赖 -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+
+  <!-- 测试 -->
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

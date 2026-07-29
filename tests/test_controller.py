@@ -16,7 +16,10 @@ from fastapi.testclient import TestClient
 from bsd_unitree_controller.exception.exceptions import BizException
 from bsd_unitree_controller.service.controller_service import HealthService, EstopService
 
-from main import app
+from bsd_unitree_controller.api.server import create_app
+from bsd_unitree_controller.core.config import load_config
+
+app = create_app(load_config())
 
 
 # ── service 层测试（不依赖 fastapi/rclpy）──────────────────────

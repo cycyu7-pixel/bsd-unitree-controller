@@ -92,11 +92,38 @@ class AppConfig(BaseModel):
 
 # ── 加载逻辑 ────────────────────────────────────────────────────────
 
-# 默认配置文件路径：项目根目录 / config / config.yaml
-# 本文件位于 src/bsd_unitree_controller/core/config.py，向上回退三级到项目根
-_DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent.parent.parent / "config" / "config.yaml"
-)
+# 配置文件查找路径（按优先级）：
+# 1. 环境变量 BSD_CONFIG_PATH 指定的路径（部署时灵活指定）
+# 2. 包同级目录的 config/config.yaml（开发时，项目根/config/config.yaml）
+# 3. 包安装目录的 config/config.yaml（colcon install 后）
+# 4. /app/config/config.yaml（Docker 容器内）
+# 本文件位于 bsd_unitree_controller/core/config.py，向上回退两级到包同级目录
+_PACKAGE_DIR = Path(__file__).resolve().parent.parent
+_DEFAULT_CONFIG_PATHS = [
+    Path(_PACKAGE_DIR) / "config" / "config.yaml",          # 开发：项目根/config/
+    Path(_PACKAGE_DIR).parent / "config" / "config.yaml",   # colcon install 后上级
+    Path("/app/config/config.yaml"),                        # Docker 容器
+]
+
+
+def _find_config_path() -> Path | None:
+    """按优先级查找配置文件，返回第一个存在的路径。
+
+    Returns:
+        配置文件路径，找不到返回 None。
+    """
+    # 1. 环境变量优先
+    env_path = os.environ.get("BSD_CONFIG_PATH")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+
+    # 2. 默认路径列表
+    for p in _DEFAULT_CONFIG_PATHS:
+        if p.exists():
+            return p
+    return None
 
 
 def _apply_env_overrides(raw: dict[str, Any]) -> None:
@@ -132,16 +159,27 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
 
     加载顺序：yaml 文件 -> 环境变量覆盖 -> Pydantic 校验。
 
+    配置文件查找优先级：
+        1. 参数显式传入 config_path
+        2. 环境变量 BSD_CONFIG_PATH
+        3. 包同级目录 config/config.yaml（开发环境）
+        4. 包上级目录 config/config.yaml（colcon install 后）
+        5. /app/config/config.yaml（Docker 容器）
+    都找不到则用 Pydantic 默认值。
+
     Args:
-        config_path: 配置文件路径，默认为 项目根/config/config.yaml。
+        config_path: 配置文件路径，显式传入时优先用这个。
 
     Returns:
         AppConfig 实例。配置文件不存在时返回默认值，仍会应用环境变量覆盖。
     """
-    path = config_path or _DEFAULT_CONFIG_PATH
+    # 显式传入 > 环境变量 > 默认查找列表
+    if config_path is None:
+        config_path = _find_config_path()
+
     raw: dict[str, Any] = {}
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
+    if config_path and config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
 
     # 环境变量覆盖 yaml，便于不改文件就能临时调端口/上游地址
