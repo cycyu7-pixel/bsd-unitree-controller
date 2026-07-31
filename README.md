@@ -106,11 +106,28 @@ HTTP  -> │ HTTP 入口   │         │ ROS 入口    │  ← 入口层薄�
 uv sync
 
 # 启动（开发机无 rclpy，自动降级为纯 HTTP 模式）
-uv run python main.py
+uv run python -m bsd_unitree_controller.main
 
 # 或用 uvicorn 热重载
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 18800
+uv run uvicorn bsd_unitree_controller.main:app --reload --host 0.0.0.0 --port 18800
 ```
+
+### 机器人（ROS package 方式）
+
+```bash
+# 1. 把包放到 ROS 工作空间
+cp -r ~/bsd-unitree-controller ~/unitree_ros2_ws/src/bsd_unitree_controller
+
+# 2. colcon 编译
+cd ~/unitree_ros2_ws
+colcon build --packages-select bsd_unitree_controller
+
+# 3. source 后启动
+source ~/unitree_ros2_ws/install/setup.bash
+ros2 run bsd_unitree_controller controller
+```
+
+启动后可见日志：`ControllerNode 已启动` + `Uvicorn running on http://0.0.0.0:18800`
 
 ### 运行测试
 
@@ -127,10 +144,14 @@ uv run pytest tests/ -v   # 16 个测试用例
 
 ## 4. 工程结构
 
+标准 ROS package（ament_python 布局），包目录直接在项目根下。
+
 ```text
 bsd-unitree-controller/
-├── pyproject.toml              # 依赖声明（uv 管理）
-├── main.py                     # 启动入口 + 模块级 app
+├── package.xml                 # ROS 包描述（声明 ROS 依赖）
+├── setup.py                    # Python 包安装配置（pip 依赖 + entry_points）
+├── setup.cfg                   # 脚本安装路径
+├── pyproject.toml              # 依赖声明（uv 管理，开发用）
 ├── deploy.sh                   # 部署管理脚本（install/start/stop/logs）
 ├── scripts/                    # 部署相关脚本
 │   ├── ros_env.sh              #   ROS 环境变量配置（source 用）
@@ -138,33 +159,37 @@ bsd-unitree-controller/
 │   └── bsd-controller.service  #   systemd 服务配置（开机自启）
 ├── config/
 │   └── config.yaml             # 配置文件（类比 application.yml）
-├── src/bsd_unitree_controller/
+├── bsd_unitree_controller/     # ROS package 包目录（ament_python 布局）
 │   ├── __init__.py
-│   ├── core/                   # 核心基础设施
-│   │   ├── config.py           #   配置加载 + 环境变量覆盖
-│   │   └── deps.py             #   公共依赖（get_http_client / get_ros_node）
-│   ├── api/                    # 对外 HTTP 入口（@RestController）
-│   │   ├── __init__.py         #   api_router 汇总（加 /api/v1 前缀）
-│   │   ├── server.py           #   FastAPI app 装配 + lifespan（含 ROS 生命周期）
-│   │   └── v1/                 #   v1 版本路由
-│   │       ├── __init__.py     #     v1_router 汇总
-│   │       └── controller.py   #     机器人本体控制（健康检查/存活/急停）
-│   ├── service/                # 业务逻辑层（@Service，不依赖框架）
-│   │   └── controller_service.py #  存活检查 + 急停业务逻辑
-│   ├── client/                 # 出站 HTTP（@FeignClient）
-│   │   └── http_client.py      #   httpx + tenacity 封装
-│   ├── ros/                    # 对内 ROS 通信（软依赖 rclpy）
-│   │   └── node.py             #   ControllerNode + 生命周期函数
-│   ├── model/                  # 数据模型
-│   │   ├── response.py         #   Result<T> / PageResult<T>
-│   │   └── common.py           #   HealthVO 等通用 VO
-│   ├── exception/              # 业务异常 + 全局处理器
-│   │   ├── exceptions.py       #   BizException 等
-│   │   └── handlers.py         #   @ControllerAdvice
+│   ├── main.py                 #   启动入口（ros2 run 调用）
+│   ├── core/                   #   核心基础设施
+│   │   ├── config.py           #     配置加载 + 环境变量覆盖 + 多路径查找
+│   │   └── deps.py             #     公共依赖（get_http_client / get_ros_node）
+│   ├── api/                    #   对外 HTTP 入口（@RestController）
+│   │   ├── __init__.py         #     api_router 汇总（加 /api/v1 前缀）
+│   │   ├── server.py           #     FastAPI app 装配 + lifespan（含 ROS 生命周期）
+│   │   └── v1/                 #     v1 版本路由
+│   │       ├── __init__.py     #       v1_router 汇总
+│   │       ├── controller.py   #       机器人本体控制（健康检查/存活/急停）
+│   │       └── agv.py          #       AGV 调度（呼叫/到位回调）
+│   ├── service/                #   业务逻辑层（@Service，不依赖框架）
+│   │   ├── controller_service.py #    存活检查 + 急停业务逻辑
+│   │   └── agv_service.py      #     AGV 呼叫 + 到位回调业务逻辑
+│   ├── client/                 #   出站 HTTP（@FeignClient）
+│   │   └── http_client.py      #     httpx + tenacity 封装
+│   ├── ros/                    #   对内 ROS 通信（软依赖 rclpy）
+│   │   └── node.py             #     ControllerNode + 生命周期函数
+│   ├── model/                  #   数据模型
+│   │   ├── response.py         #     Result<T> / PageResult<T>
+│   │   └── common.py           #     HealthVO 等通用 VO
+│   ├── exception/              #   业务异常 + 全局处理器
+│   │   ├── exceptions.py       #     BizException 等
+│   │   └── handlers.py         #     @ControllerAdvice
 │   └── utils/
-│       └── logging.py          # loguru 日志初始化
+│       └── logging.py          #     loguru 日志初始化
 └── tests/                      # 测试（pytest + TestClient）
-    └── test_controller.py
+    ├── test_controller.py
+    └── test_agv.py
 ```
 
 | 路径 | 职责 |
@@ -438,10 +463,13 @@ grep "ERROR\|WARNING" ~/bsd-unitree-controller/logs/app_$(date +%Y-%m-%d).log
 
 ### 部署架构
 
-采用**进程直跑 + systemd** 方案，不用 Docker。原因：rclpy 是 C 扩展，依赖大量系统级 `.so` 文件，Docker 挂载 ROS 环境依赖链过长；机器人已有完整 ROS 环境，进程直跑直接用，`pip3 install --user` 不污染系统。
+采用**ROS package + colcon 构建** 方案。项目是标准 ROS package（ament_python），放到机器人 ROS 工作空间编译运行。
 
 | 特性 | 实现方式 |
 | --- | --- |
+| 包管理 | `package.xml` 声明 ROS 依赖，`setup.py` 声明 pip 依赖 |
+| 构建 | `colcon build`（ROS 标准） |
+| 启动 | `ros2 run bsd_unitree_controller controller` |
 | 环境隔离 | `pip3 install --user`，依赖装到 `~/.local/`，不碰系统目录 |
 | 开机自启 | systemd `enable`，机器人重启自动恢复 |
 | 崩溃重启 | systemd `Restart=always`，5 秒后自动重启 |
@@ -453,62 +481,90 @@ grep "ERROR\|WARNING" ~/bsd-unitree-controller/logs/app_$(date +%Y-%m-%d).log
 # 1. 拉代码
 cd ~
 git clone https://github.com/cycyu7-pixel/bsd-unitree-controller.git
-cd bsd-unitree-controller
 
-# 2. 一键部署（装依赖 + 注册 systemd + 启动）
-chmod +x deploy.sh scripts/*.sh
-./deploy.sh install
+# 2. 把包放到 ROS 工作空间
+cp -r ~/bsd-unitree-controller ~/unitree_ros2_ws/src/bsd_unitree_controller
+
+# 3. 装 Python 依赖（清代理避免报错）
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY
+cd ~/unitree_ros2_ws/src/bsd_unitree_controller
+pip3 install --user fastapi "uvicorn[standard]" httpx tenacity pydantic pyyaml loguru socksio
+
+# 4. colcon 编译
+cd ~/unitree_ros2_ws
+colcon build --packages-select bsd_unitree_controller
+
+# 5. source 后启动
+source ~/unitree_ros2_ws/install/setup.bash
+ros2 run bsd_unitree_controller controller
 ```
-
-`install` 会自动完成 4 步：
-1. `pip3 install --user` 装依赖（不污染系统环境）
-2. 修脚本换行符 + 设执行权限
-3. 注册 systemd 服务 + 设开机自启
-4. 启动服务
 
 ### 部署后验证
 
 ```bash
-# 1. 服务状态
-./deploy.sh status
-# 期望：active (running) + 18800 端口监听
+# 1. ROS package 识别
+source ~/unitree_ros2_ws/install/setup.bash
+ros2 pkg list | grep bsd                    # -> bsd_unitree_controller
 
-# 2. HTTP 接口
-curl http://127.0.0.1:18800/api/v1/test
-curl http://127.0.0.1:18800/api/v1/ros/status    # status=alive
+# 2. ROS 节点注册
+ros2 node list | grep controller            # -> /controller
 
-# 3. ROS 节点（另开终端）
-source ~/bsd-unitree-controller/scripts/ros_env.sh
-ros2 node list | grep controller                 # -> /controller
+# 3. ROS service 调用
 ros2 service call /controller/is_alive std_srvs/srv/Trigger  # -> success=True
+
+# 4. HTTP 接口
+curl http://127.0.0.1:18800/api/v1/test     # -> {"code":1,...}
+curl http://127.0.0.1:18800/api/v1/alive    # -> status=alive
 ```
-
-### deploy.sh 命令一览
-
-| 命令 | 作用 |
-| --- | --- |
-| `./deploy.sh install` | 装依赖 + 注册 systemd 服务 + 启动（首次部署用） |
-| `./deploy.sh start` | 启动服务 |
-| `./deploy.sh stop` | 停止服务 |
-| `./deploy.sh restart` | 重启服务 |
-| `./deploy.sh status` | 查看服务状态 + 端口监听 |
-| `./deploy.sh logs` | 查看日志（实时跟踪） |
-| `./deploy.sh uninstall` | 卸载 systemd 服务 |
 
 ### 更新代码
 
 ```bash
+# 1. 拉新代码
 cd ~/bsd-unitree-controller
 git pull
-./deploy.sh restart
+
+# 2. 同步到工作空间
+cp -r ~/bsd-unitree-controller ~/unitree_ros2_ws/src/bsd_unitree_controller
+
+# 3. 重新编译
+cd ~/unitree_ros2_ws
+colcon build --packages-select bsd_unitree_controller
+
+# 4. 重启服务（如果用 systemd）
+sudo systemctl restart bsd-controller
+# 或手动重启
+source ~/unitree_ros2_ws/install/setup.bash
+ros2 run bsd_unitree_controller controller
+```
+
+### 开机自启（systemd）
+
+`scripts/bsd-controller.service` 配置开机自启，`ExecStart` 调用 `ros2 run`：
+
+```bash
+# 注册 systemd 服务（首次）
+sudo cp ~/bsd-unitree-controller/scripts/bsd-controller.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable bsd-controller
+sudo systemctl start bsd-controller
+
+# 日常管理
+sudo systemctl status bsd-controller       # 看状态
+sudo systemctl restart bsd-controller      # 重启
+journalctl -u bsd-controller -f            # 看日志
 ```
 
 ### 卸载（恢复机器人原样）
 
 ```bash
-./deploy.sh uninstall                          # 移除 systemd 服务
-pip3 uninstall bsd-unitree-controller fastapi uvicorn httpx tenacity loguru pydantic pyyaml
-rm -rf ~/bsd-unitree-controller                # 删除项目目录
+sudo systemctl stop bsd-controller
+sudo systemctl disable bsd-controller
+sudo rm /etc/systemd/system/bsd-controller.service
+rm -rf ~/unitree_ros2_ws/src/bsd_unitree_controller
+rm -rf ~/unitree_ros2_ws/install/bsd_unitree_controller
+rm -rf ~/unitree_ros2_ws/build/bsd_unitree_controller
+pip3 uninstall bsd-unitree-controller fastapi uvicorn httpx tenacity loguru pydantic pyyaml socksio
 ```
 
 卸载后机器人恢复原样，不影响 ROS 环境和其他节点。
@@ -519,7 +575,7 @@ rm -rf ~/bsd-unitree-controller                # 删除项目目录
 
 ```bash
 uv sync
-uv run python main.py
+uv run python -m bsd_unitree_controller.main
 ```
 
 ## 11. 改代码后怎么上线
@@ -642,5 +698,5 @@ ros2 service type /controller/is_alive
 | 业务方/所属团队 | bsd-wl 开发团队 |
 | 技术栈 | Python 3.10 + FastAPI + httpx + tenacity + Pydantic + loguru + rclpy（软依赖） |
 | 部署环境 | 宇树 G1 机器人（Ubuntu 22.04 + ROS Humble + Cyclone DDS） |
-| 部署方式 | 进程直跑 + systemd（开机自启 + 崩溃重启） |
+| 部署方式 | ROS package（colcon build + ros2 run + systemd 开机自启） |
 | README 维护建议 | 代码、配置、接口或部署方式变化时同步更新 |
