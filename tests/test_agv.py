@@ -74,15 +74,16 @@ def test_call_agv_failure_raises() -> None:
 
 
 def test_handle_arrived_returns_success() -> None:
-    """到位回调：service 返回 success=true。"""
+    """到位回调：service 返回 success=true，message 含 container。"""
     mock = _MockHttpClient({})
     cfg = AgvConfig()
     svc = AgvService(config=cfg, http_client=mock)
 
-    result = svc.handle_arrived({"workstation": "W03", "agv_id": "AGV001"})
+    result = svc.handle_arrived({"workstation": "W03", "container": "T0383614"})
 
     assert result["success"] is True
     assert "到位" in result["message"]
+    assert "T0383614" in result["message"]
 
 
 # ── HTTP 入口测试 ──────────────────────────────────────────────
@@ -90,10 +91,75 @@ def test_handle_arrived_returns_success() -> None:
 def test_agv_arrived_endpoint_returns_raw_dict() -> None:
     """AGV 到位回调接口直接返回 dict（不包 Result），符合对方期望。"""
     with TestClient(app) as client:
-        resp = client.post("/api/v1/agv/arrived", json={"workstation": "W03"})
+        resp = client.post("/api/v1/agv/arrived", json={"workstation": "W03", "container": "T0383614"})
 
         assert resp.status_code == 200
         body = resp.json()
         # 不包 Result，直接是 {"success": true, "message": "..."}
         assert body["success"] is True
         assert "message" in body
+        assert "T0383614" in body["message"]
+
+
+# ── 返库测试 ──────────────────────────────────────────────────
+
+def test_return_agv_without_container_raises() -> None:
+    """没收到到位回调就调返库，应抛 BizException(code=50004)。"""
+    from bsd_unitree_controller.exception.exceptions import BizException
+
+    mock = _MockHttpClient({})
+    cfg = AgvConfig()
+    svc = AgvService(config=cfg, http_client=mock)
+
+    try:
+        svc.return_agv()
+        assert False, "应抛 BizException"
+    except BizException as e:
+        assert e.code == 50004
+        assert "container" in e.message
+
+
+def test_return_agv_after_arrived_success() -> None:
+    """收到到位回调后调返库，应构造正确请求体并返回成功。"""
+    mock = _MockHttpClient({"code": 0, "message": "", "success": True, "result": {}, "timestamp": 0})
+    cfg = AgvConfig(workstation="W03")
+    svc = AgvService(config=cfg, http_client=mock)
+
+    # 先模拟到位回调，缓存 container
+    svc.handle_arrived({"workstation": "W03", "container": "T0383614"})
+
+    # 再调返库
+    result = svc.return_agv()
+
+    assert result["container"] == "T0383614"
+    assert result["workstation"] == "W03"
+    assert result["response"]["success"] is True
+    # 校验请求体
+    assert len(mock.calls) == 1
+    url, payload = mock.calls[0]
+    assert "hikAGVCTUInCallRobotBack" in url
+    assert payload["podNo"] == "T0383614"
+    assert payload["type"] == "FK"
+    assert payload["workstationNo"] == "W03"
+    assert payload["podCategory"] == ""
+
+
+def test_return_agv_clears_container_cache() -> None:
+    """返库成功后应清除 container 缓存，再次调返库应报错。"""
+    from bsd_unitree_controller.exception.exceptions import BizException
+
+    mock = _MockHttpClient({"code": 0, "message": "", "success": True, "result": {}, "timestamp": 0})
+    cfg = AgvConfig()
+    svc = AgvService(config=cfg, http_client=mock)
+
+    # 到位回调缓存 container
+    svc.handle_arrived({"workstation": "W03", "container": "T0383614"})
+    # 返库（成功后会清除缓存）
+    svc.return_agv()
+
+    # 再次返库应报错（缓存已清）
+    try:
+        svc.return_agv()
+        assert False, "缓存清除后再次返库应抛 BizException"
+    except BizException as e:
+        assert e.code == 50004

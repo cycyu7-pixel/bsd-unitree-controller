@@ -23,19 +23,18 @@ router = APIRouter(prefix="/agv", tags=["AGV 调度"])
 
 
 # ── AGV 到位回调入参 ──────────────────────────────────────────
-# 对方回调传什么字段未完全确定，先用宽松的 dict 接收
-# 后续确认对方格式后可改成具体字段
+# 对方回调参数格式：{"workstation":"W03","container":"T0383614"}
 
 class AgvArrivedDTO(BaseModel):
     """AGV 到位回调入参。
 
-    字段宽松接收，对方传什么都进来，service 层记录日志。
-    后续确认对方格式后可细化字段。
+    对方（AGV 调度系统）回调时传 workstation 和 container 两个字段。
     """
 
-    model_config = {"extra": "allow"}  # 允许额外字段，不校验
+    model_config = {"extra": "allow"}  # 允许额外字段，兼容对方扩展
 
-    workstation: str | None = Field(None, description="工位号（对方可能传）")
+    workstation: str = Field(..., description="工位号")
+    container: str = Field(..., description="容器/货架编号")
 
 
 # ── 呼叫 AGV ─────────────────────────────────────────────────
@@ -82,3 +81,32 @@ def agv_arrived(
     """
     service = AgvService(config=_global_config.agv, http_client=http_client)
     return service.handle_arrived(dto.model_dump())
+
+
+# ── AGV 返库 ─────────────────────────────────────────────────
+
+@router.post("/return", summary="AGV 返库")
+def return_agv(
+    http_client: HttpClient = Depends(get_http_client),
+) -> Result[dict]:
+    """触发 AGV 返库。
+
+    从到位回调缓存的 container 作为 podNo，调 AGV 调度系统返库接口。
+    必须先呼叫 AGV 并收到到位回调（缓存 container），否则返回 code=50004。
+
+    参数映射（代码内部构造，不需前端传）：
+        - podCategory: ""（固定）
+        - podNo: 到位回调时收到的 container
+        - type: "FK"（固定）
+        - workstationNo: 从配置读取
+
+    Returns:
+        Result，data 含 workstation、container 和对方返回的原始响应。
+
+    Raises:
+        BizException: 无 container 可用时抛出（code=50004）。
+        UpstreamException: AGV 调度系统返回失败时抛出（code=50001）。
+    """
+    service = AgvService(config=_global_config.agv, http_client=http_client)
+    data = service.return_agv()
+    return Result.ok(data=data)

@@ -44,19 +44,19 @@ class ControllerNode(_BaseNode):
         - create_service: 提供本节点可被调用的服务
 
     节点名从 config.ros.node_name 读取（后续接入时改 __init__ 签名），
-    当前骨架阶段硬编码默认值为 "controller"。
+    当前骨架阶段硬编码默认值为 "web_controller"。
     """
 
     def __init__(
         self,
-        node_name: str = "controller",
+        node_name: str = "web_controller",
         http_client=None,
         agv_config=None,
     ) -> None:
         """初始化节点。
 
         Args:
-            node_name: ROS 节点名，默认 "controller"。
+            node_name: ROS 节点名，默认 "web_controller"。
             http_client: HttpClient 实例，供 AgvService 调用外部 HTTP 接口。
                         None 时不注册 AGV service。
             agv_config: AgvConfig 实例，AGV 调度配置。
@@ -81,18 +81,19 @@ class ControllerNode(_BaseNode):
         self.create_service(Trigger, "~/is_alive", self._handle_is_alive)
         self.get_logger().info("ROS service 已注册: ~/is_alive")
 
-        # ── 呼叫 AGV service：~/call_agv ───────────────────────────
-        # 业务逻辑调 AgvService，与 HTTP /api/v1/agv/call 共享同一份逻辑
+        # ── AGV service：~/call_agv + ~/return_agv ─────────────────
+        # 业务逻辑调 AgvService，与 HTTP /api/v1/agv/* 共享同一份逻辑
         # 需要 http_client 和 agv_config，缺任一则不注册
         if http_client is not None and agv_config is not None:
             from bsd_unitree_controller.service.agv_service import AgvService
 
             self._agv_service = AgvService(config=agv_config, http_client=http_client)
             self.create_service(Trigger, "~/call_agv", self._handle_call_agv)
-            self.get_logger().info("ROS service 已注册: ~/call_agv")
+            self.create_service(Trigger, "~/return_agv", self._handle_return_agv)
+            self.get_logger().info("ROS service 已注册: ~/call_agv, ~/return_agv")
         else:
             self._agv_service = None
-            self.get_logger().warning("http_client 或 agv_config 未提供，跳过 ~/call_agv 注册")
+            self.get_logger().warning("http_client 或 agv_config 未提供，跳过 AGV service 注册")
 
     # ── 急停 service 调用（供 EstopService 调用）──────────────────
 
@@ -187,6 +188,36 @@ class ControllerNode(_BaseNode):
             response.message = f"AGV 呼叫失败: {exc}"
         return response
 
+    def _handle_return_agv(self, request, response) -> object:
+        """ROS service 回调：处理 ~/return_agv 调用。
+
+        本方法只做翻译：调 AgvService 拿业务结果，转成 ROS 消息字段。
+        业务逻辑在 service 层，与 HTTP /api/v1/agv/return 共享，无冗余。
+        container 从到位回调缓存读取，不需要请求参数。
+
+        Args:
+            request: Trigger.Request，无字段。
+            response: Trigger.Response，含 success(bool) 和 message(string)。
+
+        Returns:
+            填充后的 response。
+        """
+        if self._agv_service is None:
+            response.success = False
+            response.message = "AGV service 未启用（缺少 http_client 或 agv_config）"
+            return response
+
+        try:
+            # 调 service 层，与 HTTP /api/v1/agv/return 调同一个方法
+            data = self._agv_service.return_agv()
+            response.success = True
+            response.message = f"AGV 返库成功|workstation={data['workstation']}, container={data['container']}"
+        except Exception as exc:
+            # 无 container 或 AGV 调度系统失败，转成 ROS service 失败响应
+            response.success = False
+            response.message = f"AGV 返库失败: {exc}"
+        return response
+
     @property
     def is_alive(self) -> bool:
         """节点是否存活。
@@ -211,7 +242,7 @@ def is_ros_available() -> bool:
 
 
 def init_ros(
-    node_name: str = "controller",
+    node_name: str = "web_controller",
     http_client=None,
     agv_config=None,
 ) -> Optional[ControllerNode]:

@@ -56,9 +56,10 @@ class AgvConfig(BaseModel):
     base_url 拆分出来便于切换环境（测试/生产），path 和 workstation 跟着场景走。
     """
 
-    base_url: str = "https://gwwms.bsdits.cn"   # AGV 调度系统基础地址
-    call_path: str = "/wcs/hikagv/callRobotComeByType"  # 呼叫 AGV 接口路径
-    workstation: str = "W03"                    # 工位号（AGV 要到的位置）
+    base_url: str = "https://gwwms.bsdits.cn"               # AGV 调度系统基础地址
+    call_path: str = "/wcs/hikagv/callRobotComeByType"      # 呼叫 AGV 接口路径
+    return_path: str = "/wcs/hikagv/hikAGVCTUInCallRobotBack"  # 返库接口路径
+    workstation: str = "W03"                                # 工位号（每个机器人不同）
 
 
 class LogConfig(BaseModel):
@@ -74,8 +75,8 @@ class RosConfig(BaseModel):
     enabled=false 时纯 HTTP 模式，不初始化 ROS（适合 rclpy 未装或调试时）。
     """
 
-    enabled: bool = True              # 是否启用 ROS 节点
-    node_name: str = "controller"     # ROS 节点名
+    enabled: bool = True                  # 是否启用 ROS 节点
+    node_name: str = "web_controller"     # ROS 节点名
 
 
 # ── 顶层配置 ────────────────────────────────────────────────────────

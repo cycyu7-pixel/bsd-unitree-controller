@@ -96,21 +96,85 @@ class AgvService:
     def handle_arrived(self, payload: Mapping[str, Any]) -> dict:
         """处理 AGV 到位回调。
 
-        AGV 到位后，调度系统回调本接口通知。当前只记录日志并返回确认，
+        AGV 到位后，调度系统回调本接口通知。当前记录日志并返回确认，
         后续可扩展（如通知 ROS 节点、触发业务流程等）。
 
         Args:
-            payload: 对方回调传来的数据，字段格式由对方决定，当前用 dict 接收。
+            payload: 对方回调传来的数据，含 workstation 和 container 字段。
 
         Returns:
             dict，按对方期望格式返回 {"success": true, "message": "..."}。
         """
-        logger.info("AGV 已到位: {}", dict(payload))
+        workstation = payload.get("workstation", "")
+        container = payload.get("container", "")
+        logger.info("AGV 已到位: workstation={}, container={}", workstation, container)
+
+        # container 缓存到实例，供 return_agv 使用
+        self._last_container = container
 
         # 后续扩展点：到位后可通知 ROS 节点或触发业务流程
         # 例如：ros_node.publish_arrived(payload)
 
         return {
             "success": True,
-            "message": "AGV 到位通知已接收",
+            "message": f"AGV 到位通知已接收: workstation={workstation}, container={container}",
+        }
+
+    def return_agv(self) -> dict:
+        """触发 AGV 返库。
+
+        从到位回调缓存的 container 作为 podNo，调 AGV 调度系统返库接口。
+        参数映射：
+            - podCategory: 空字符串（固定）
+            - podNo: 到位回调时收到的 container
+            - type: "FK"（固定）
+            - workstationNo: 从配置读取的 workstation
+
+        Returns:
+            dict，含 workstation、container 和对方返回的原始响应。
+
+        Raises:
+            BizException: 没有缓存的 container（还没收到到位回调）时抛出。
+            UpstreamException: AGV 调度系统返回失败时抛出。
+        """
+        # 取到位回调缓存的 container，没有则报错
+        container = getattr(self, "_last_container", None)
+        if not container:
+            raise BizException(
+                code=50004,
+                message="无 container 可用，请先呼叫 AGV 并等待到位回调",
+            )
+
+        # 拼完整 URL
+        url = f"{self._config.base_url}{self._config.return_path}"
+
+        # 构造请求体
+        payload = {
+            "podCategory": "",
+            "podNo": container,
+            "type": "FK",
+            "workstationNo": self._config.workstation,
+        }
+
+        logger.info("AGV 返库: url={}, container={}", url, container)
+
+        # 调 AGV 调度系统
+        resp = self._http.post(url, json=payload)
+        data = resp.json()
+
+        # 业务校验
+        if not data.get("success", False):
+            raise UpstreamException(
+                f"AGV 调度系统返回失败: code={data.get('code')}, message={data.get('message')}"
+            )
+
+        logger.info("AGV 返库成功: container={}", container)
+
+        # 返库成功后清除缓存，避免下次返库用到旧的 container
+        self._last_container = None
+
+        return {
+            "workstation": self._config.workstation,
+            "container": container,
+            "response": data,
         }
