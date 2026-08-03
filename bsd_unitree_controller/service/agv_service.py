@@ -80,7 +80,7 @@ class AgvService:
             "workstation": self._config.workstation,
         }
 
-        logger.info("呼叫 AGV: url={}, workstation={}", url, self._config.workstation)
+        logger.info("呼叫 AGV: url={}, payload={}", url, payload)
 
         # 调 AGV 调度系统（带固定鉴权请求头）
         resp = self._http.post(url, json=payload, headers=self._headers)
@@ -161,7 +161,7 @@ class AgvService:
             "workstationNo": self._config.workstation,
         }
 
-        logger.info("AGV 返库: url={}, container={}", url, container)
+        logger.info("AGV 返库: url={}, payload={}", url, payload)
 
         # 调 AGV 调度系统（带固定鉴权请求头）
         resp = self._http.post(url, json=payload, headers=self._headers)
