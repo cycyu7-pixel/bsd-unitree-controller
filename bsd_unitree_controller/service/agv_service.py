@@ -76,7 +76,7 @@ class AgvService:
         # 构造请求体，workstation 从配置读取
         payload = {
             "barcode": "",
-            "podCategory": "1",
+            "podCategory": "2",
             "workstation": self._config.workstation,
         }
 
