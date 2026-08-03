@@ -51,6 +51,11 @@ class AgvService:
         """
         self._config = config
         self._http = http_client
+        # AGV 调度系统固定请求头（鉴权用）
+        self._headers = {
+            "usercode": "116173",
+            "X-Access-Token": "1",
+        }
 
     def call_agv(self) -> dict:
         """呼叫 AGV 小车到配置的工位。
@@ -77,8 +82,8 @@ class AgvService:
 
         logger.info("呼叫 AGV: url={}, workstation={}", url, self._config.workstation)
 
-        # 调 AGV 调度系统
-        resp = self._http.post(url, json=payload)
+        # 调 AGV 调度系统（带固定鉴权请求头）
+        resp = self._http.post(url, json=payload, headers=self._headers)
         data = resp.json()
 
         # 业务校验：对方返回 success=false 表示呼叫失败
@@ -158,8 +163,8 @@ class AgvService:
 
         logger.info("AGV 返库: url={}, container={}", url, container)
 
-        # 调 AGV 调度系统
-        resp = self._http.post(url, json=payload)
+        # 调 AGV 调度系统（带固定鉴权请求头）
+        resp = self._http.post(url, json=payload, headers=self._headers)
         data = resp.json()
 
         # 业务校验

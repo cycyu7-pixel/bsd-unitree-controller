@@ -27,10 +27,10 @@ class _MockHttpClient:
     def __init__(self, response_data: dict, status_code: int = 200):
         self._response_data = response_data
         self._status_code = status_code
-        self.calls: list[tuple[str, dict]] = []
+        self.calls: list[tuple[str, dict, dict]] = []  # (url, json, headers)
 
-    def post(self, url: str, *, json=None, **kwargs):
-        self.calls.append((url, json))
+    def post(self, url: str, *, json=None, headers=None, **kwargs):
+        self.calls.append((url, json, headers or {}))
         # 模拟 httpx.Response
         class _MockResp:
             def __init__(self, data, code):
@@ -53,11 +53,14 @@ def test_call_agv_success() -> None:
     assert result["response"]["success"] is True
     # 校验请求体
     assert len(mock.calls) == 1
-    url, payload = mock.calls[0]
+    url, payload, headers = mock.calls[0]
     assert url == "https://gwwms.bsdits.cn/wcs/hikagv/callRobotComeByType"
     assert payload["workstation"] == "W03"
     assert payload["podCategory"] == "1"
     assert payload["barcode"] == ""
+    # 校验鉴权请求头
+    assert headers["usercode"] == "116173"
+    assert headers["X-Access-Token"] == "1"
 
 
 def test_call_agv_failure_raises() -> None:
@@ -136,12 +139,15 @@ def test_return_agv_after_arrived_success() -> None:
     assert result["response"]["success"] is True
     # 校验请求体
     assert len(mock.calls) == 1
-    url, payload = mock.calls[0]
+    url, payload, headers = mock.calls[0]
     assert "hikAGVCTUInCallRobotBack" in url
     assert payload["podNo"] == "T0383614"
     assert payload["type"] == "FK"
     assert payload["workstationNo"] == "W03"
     assert payload["podCategory"] == ""
+    # 校验鉴权请求头
+    assert headers["usercode"] == "116173"
+    assert headers["X-Access-Token"] == "1"
 
 
 def test_return_agv_clears_container_cache() -> None:
