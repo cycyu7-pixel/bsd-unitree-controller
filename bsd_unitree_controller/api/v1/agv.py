@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from bsd_unitree_controller.client.http_client import HttpClient
 from bsd_unitree_controller.core.config import config as _global_config
 from bsd_unitree_controller.core.deps import get_http_client
+from bsd_unitree_controller.model.dto import AgvCallDTO, AgvReturnDTO
 from bsd_unitree_controller.model.response import Result
 from bsd_unitree_controller.service.agv_service import AgvService
 
@@ -28,12 +29,14 @@ router = APIRouter(prefix="/agv", tags=["AGV 调度"])
 class AgvArrivedDTO(BaseModel):
     """AGV 到位回调入参。
 
-    对方（AGV 调度系统）回调时传 workstation 和 container 两个字段。
+    对方（AGV 调度系统）回调时传一大堆字段，本系统当前只关心 container。
+    workstation 对方不一定传，设为可选，缺失时用空串占位。
+    其余字段靠 extra="allow" 自动接收，不校验也不报错。
     """
 
-    model_config = {"extra": "allow"}  # 允许额外字段，兼容对方扩展
+    model_config = {"extra": "allow"}  # 允许额外字段，兼容对方传 taskCode/robotId 等一大堆字段
 
-    workstation: str = Field(..., description="工位号")
+    workstation: str | None = Field(None, description="工位号，对方不一定传")
     container: str = Field(..., description="容器/货架编号")
 
 
@@ -41,22 +44,24 @@ class AgvArrivedDTO(BaseModel):
 
 @router.post("/call", summary="呼叫 AGV 小车")
 def call_agv(
+    dto: AgvCallDTO | None = None,
     http_client: HttpClient = Depends(get_http_client),
 ) -> Result[dict]:
     """呼叫 AGV 小车到配置的工位。
 
-    工位号从 config.yaml 的 agv.workstation 读取，不从前端传参。
-    调用 AGV 调度系统接口，对方返回 success=true 表示呼叫成功。
-    小车实际到位后会回调 /api/v1/agv/arrived 通知本服务。
+    所有字段可选，不传时用默认值，传了就覆盖。
+    - barcode: 默认空字符串
+    - podCategory: 默认 "2"
+    - workstation: 默认从 config.yaml 读取
 
     Returns:
-        Result，data 含 workstation 和对方返回的原始响应。
+        Result，data 含实际使用的 workstation 和对方返回的原始响应。
 
     Raises:
         UpstreamException: AGV 调度系统返回失败时抛出（code=50001）。
     """
     service = AgvService(config=_global_config.agv, http_client=http_client)
-    data = service.call_agv()
+    data = service.call_agv(dto)
     return Result.ok(data=data)
 
 
@@ -87,26 +92,24 @@ def agv_arrived(
 
 @router.post("/return", summary="AGV 返库")
 def return_agv(
+    dto: AgvReturnDTO | None = None,
     http_client: HttpClient = Depends(get_http_client),
 ) -> Result[dict]:
     """触发 AGV 返库。
 
-    从到位回调缓存的 container 作为 podNo，调 AGV 调度系统返库接口。
-    必须先呼叫 AGV 并收到到位回调（缓存 container），否则返回 code=50004。
-
-    参数映射（代码内部构造，不需前端传）：
-        - podCategory: ""（固定）
-        - podNo: 到位回调时收到的 container
-        - type: "FK"（固定）
-        - workstationNo: 从配置读取
+    所有字段可选，不传时用默认值，传了就覆盖。
+    - podCategory: 默认空字符串
+    - podNo: 默认用到位回调缓存的 container
+    - type: 默认 "FK"
+    - workstationNo: 默认从 config.yaml 读取
 
     Returns:
-        Result，data 含 workstation、container 和对方返回的原始响应。
+        Result，data 含实际使用的 workstation、container 和对方返回的原始响应。
 
     Raises:
         BizException: 无 container 可用时抛出（code=50004）。
         UpstreamException: AGV 调度系统返回失败时抛出（code=50001）。
     """
     service = AgvService(config=_global_config.agv, http_client=http_client)
-    data = service.return_agv()
+    data = service.return_agv(dto)
     return Result.ok(data=data)

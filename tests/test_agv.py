@@ -56,7 +56,7 @@ def test_call_agv_success() -> None:
     url, payload, headers = mock.calls[0]
     assert url == "https://gwwms.bsdits.cn/wcs/hikagv/callRobotComeByType"
     assert payload["workstation"] == "W03"
-    assert payload["podCategory"] == "1"
+    assert payload["podCategory"] == "2"
     assert payload["barcode"] == ""
     # 校验鉴权请求头
     assert headers["usercode"] == "116173"

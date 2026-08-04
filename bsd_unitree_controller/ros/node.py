@@ -83,6 +83,7 @@ class ControllerNode(_BaseNode):
 
         # ── AGV service：~/call_agv + ~/return_agv ─────────────────
         # 业务逻辑调 AgvService，与 HTTP /api/v1/agv/* 共享同一份逻辑
+        # 用自定义 srv 类型（CallAgv/ReturnAgv），支持传参覆盖默认值
         # 需要 http_client 和 agv_config，缺任一则不注册
         if http_client is not None and agv_config is not None:
             from bsd_unitree_controller.service.agv_service import AgvService
@@ -161,9 +162,8 @@ class ControllerNode(_BaseNode):
     def _handle_call_agv(self, request, response) -> object:
         """ROS service 回调：处理 ~/call_agv 调用。
 
-        本方法只做翻译：调 AgvService 拿业务结果，转成 ROS 消息字段。
-        业务逻辑在 service 层，与 HTTP /api/v1/agv/call 共享，无冗余。
-        workstation 从配置读取，不需要请求参数。
+        用 Trigger（无参），调 service 层时传 None，用默认值。
+        需要传参时用 HTTP 接口 /api/v1/agv/call。
 
         Args:
             request: Trigger.Request，无字段。
@@ -178,12 +178,11 @@ class ControllerNode(_BaseNode):
             return response
 
         try:
-            # 调 service 层，与 HTTP /api/v1/agv/call 调同一个方法
-            data = self._agv_service.call_agv()
+            # 调 service 层，传 None 用默认值
+            data = self._agv_service.call_agv(None)
             response.success = True
             response.message = f"AGV 呼叫成功|workstation={data['workstation']}"
         except Exception as exc:
-            # AgvService 抛 UpstreamException 等，转成 ROS service 失败响应
             response.success = False
             response.message = f"AGV 呼叫失败: {exc}"
         return response
@@ -191,9 +190,8 @@ class ControllerNode(_BaseNode):
     def _handle_return_agv(self, request, response) -> object:
         """ROS service 回调：处理 ~/return_agv 调用。
 
-        本方法只做翻译：调 AgvService 拿业务结果，转成 ROS 消息字段。
-        业务逻辑在 service 层，与 HTTP /api/v1/agv/return 共享，无冗余。
-        container 从到位回调缓存读取，不需要请求参数。
+        用 Trigger（无参），调 service 层时传 None，用默认值。
+        需要传参时用 HTTP 接口 /api/v1/agv/return。
 
         Args:
             request: Trigger.Request，无字段。
@@ -208,8 +206,8 @@ class ControllerNode(_BaseNode):
             return response
 
         try:
-            # 调 service 层，与 HTTP /api/v1/agv/return 调同一个方法
-            data = self._agv_service.return_agv()
+            # 调 service 层，传 None 用默认值
+            data = self._agv_service.return_agv(None)
             response.success = True
             response.message = f"AGV 返库成功|workstation={data['workstation']}, container={data['container']}"
         except Exception as exc:

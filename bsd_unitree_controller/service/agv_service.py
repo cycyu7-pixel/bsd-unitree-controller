@@ -57,15 +57,19 @@ class AgvService:
             "X-Access-Token": "1",
         }
 
-    def call_agv(self) -> dict:
+    def call_agv(self, dto=None) -> dict:
         """呼叫 AGV 小车到配置的工位。
 
-        构造请求体调用 AGV 调度系统，workstation 从配置读取。
+        构造请求体调用 AGV 调度系统。
+        字段优先级：DTO 传入 > 配置/写死默认值。
         AGV 调度系统返回 success=true 表示呼叫成功（小车开始移动）。
         小车实际到位后会回调 /api/v1/agv/arrived 通知本服务。
 
+        Args:
+            dto: 呼叫 AGV 入参 DTO，None 时用默认值。字段可选，传了就覆盖默认值。
+
         Returns:
-            dict，含 workstation 和对方返回的原始响应。
+            dict，含实际使用的 workstation 和对方返回的原始响应。
 
         Raises:
             UpstreamException: AGV 调度系统返回非 2xx 或 success=false 时抛出。
@@ -73,11 +77,16 @@ class AgvService:
         # 拼完整 URL
         url = f"{self._config.base_url}{self._config.call_path}"
 
-        # 构造请求体，workstation 从配置读取
+        # 字段优先级：DTO 传入 > 默认值
+        barcode = (dto.barcode if dto and dto.barcode is not None else "") or ""
+        pod_category = (dto.podCategory if dto and dto.podCategory is not None else "2") or "2"
+        workstation = (dto.workstation if dto and dto.workstation is not None else self._config.workstation)
+
+        # 构造请求体
         payload = {
-            "barcode": "",
-            "podCategory": "2",
-            "workstation": self._config.workstation,
+            "barcode": barcode,
+            "podCategory": pod_category,
+            "workstation": workstation,
         }
 
         logger.info("呼叫 AGV: url={}, payload={}", url, payload)
@@ -92,26 +101,27 @@ class AgvService:
                 f"AGV 调度系统返回失败: code={data.get('code')}, message={data.get('message')}"
             )
 
-        logger.info("AGV 呼叫成功: workstation={}", self._config.workstation)
+        logger.info("AGV 呼叫成功: workstation={}", workstation)
         return {
-            "workstation": self._config.workstation,
+            "workstation": workstation,
             "response": data,
         }
 
     def handle_arrived(self, payload: Mapping[str, Any]) -> dict:
         """处理 AGV 到位回调。
 
-        AGV 到位后，调度系统回调本接口通知。当前记录日志并返回确认，
-        后续可扩展（如通知 ROS 节点、触发业务流程等）。
+        AGV 到位后，调度系统回调本接口通知。当前只取 container 缓存供返库用，
+        workstation 对方不一定传，缺失时记为空串。后续可扩展（如通知 ROS 节点）。
 
         Args:
-            payload: 对方回调传来的数据，含 workstation 和 container 字段。
+            payload: 对方回调传来的数据，必含 container，workstation 可选。
 
         Returns:
             dict，按对方期望格式返回 {"success": true, "message": "..."}。
         """
-        workstation = payload.get("workstation", "")
-        container = payload.get("container", "")
+        # workstation 对方不一定传，None 统一转空串便于日志和返回
+        workstation = payload.get("workstation") or ""
+        container = payload.get("container") or ""
         logger.info("AGV 已到位: workstation={}, container={}", workstation, container)
 
         # container 缓存到实例，供 return_agv 使用
@@ -125,40 +135,52 @@ class AgvService:
             "message": f"AGV 到位通知已接收: workstation={workstation}, container={container}",
         }
 
-    def return_agv(self) -> dict:
+    def return_agv(self, dto=None) -> dict:
         """触发 AGV 返库。
 
-        从到位回调缓存的 container 作为 podNo，调 AGV 调度系统返库接口。
-        参数映射：
-            - podCategory: 空字符串（固定）
-            - podNo: 到位回调时收到的 container
-            - type: "FK"（固定）
+        调 AGV 调度系统返库接口。
+        字段优先级：DTO 传入 > 缓存/配置/写死默认值。
+        参数映射（默认值）：
+            - podCategory: 空字符串
+            - podNo: 到位回调缓存的 container
+            - type: "FK"
             - workstationNo: 从配置读取的 workstation
 
+        Args:
+            dto: 返库入参 DTO，None 时用默认值。字段可选，传了就覆盖默认值。
+                 podNo 不传时用缓存的 container。
+
         Returns:
-            dict，含 workstation、container 和对方返回的原始响应。
+            dict，含实际使用的 workstation、podNo 和对方返回的原始响应。
 
         Raises:
-            BizException: 没有缓存的 container（还没收到到位回调）时抛出。
+            BizException: 没有缓存的 container 且 DTO 也没传 podNo 时抛出。
             UpstreamException: AGV 调度系统返回失败时抛出。
         """
-        # 取到位回调缓存的 container，没有则报错
-        container = getattr(self, "_last_container", None)
-        if not container:
+        # podNo 优先级：DTO 传入 > 缓存 container
+        pod_no = (dto.podNo if dto and dto.podNo is not None else None)
+        if not pod_no:
+            pod_no = getattr(self, "_last_container", None)
+        if not pod_no:
             raise BizException(
                 code=50004,
-                message="无 container 可用，请先呼叫 AGV 并等待到位回调",
+                message="无 container 可用，请先呼叫 AGV 并等待到位回调，或在入参中传 podNo",
             )
+
+        # 其他字段优先级：DTO 传入 > 默认值
+        pod_category = (dto.podCategory if dto and dto.podCategory is not None else "") or ""
+        type_val = (dto.type if dto and dto.type is not None else "FK") or "FK"
+        workstation_no = (dto.workstationNo if dto and dto.workstationNo is not None else self._config.workstation)
 
         # 拼完整 URL
         url = f"{self._config.base_url}{self._config.return_path}"
 
         # 构造请求体
         payload = {
-            "podCategory": "",
-            "podNo": container,
-            "type": "FK",
-            "workstationNo": self._config.workstation,
+            "podCategory": pod_category,
+            "podNo": pod_no,
+            "type": type_val,
+            "workstationNo": workstation_no,
         }
 
         logger.info("AGV 返库: url={}, payload={}", url, payload)
@@ -173,13 +195,13 @@ class AgvService:
                 f"AGV 调度系统返回失败: code={data.get('code')}, message={data.get('message')}"
             )
 
-        logger.info("AGV 返库成功: container={}", container)
+        logger.info("AGV 返库成功: podNo={}", pod_no)
 
         # 返库成功后清除缓存，避免下次返库用到旧的 container
         self._last_container = None
 
         return {
-            "workstation": self._config.workstation,
-            "container": container,
+            "workstation": workstation_no,
+            "container": pod_no,
             "response": data,
         }
