@@ -5,7 +5,6 @@
 支持两种启动方式：
     1. ros2 run bsd_unitree_controller controller   # ROS package 标准启动
     2. python -m bsd_unitree_controller.main         # 直接 python 启动
-    3. python main.py                                 # 开发机脚本启动（保留兼容）
 
 两种模式：
     - 机器人环境（有 rclpy）：FastAPI + ROS 节点同时运行

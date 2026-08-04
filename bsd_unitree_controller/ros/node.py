@@ -83,7 +83,7 @@ class ControllerNode(_BaseNode):
 
         # ── AGV service：~/call_agv + ~/return_agv ─────────────────
         # 业务逻辑调 AgvService，与 HTTP /api/v1/agv/* 共享同一份逻辑
-        # 用自定义 srv 类型（CallAgv/ReturnAgv），支持传参覆盖默认值
+        # 用 Trigger（无参），需要传参时用 HTTP 接口
         # 需要 http_client 和 agv_config，缺任一则不注册
         if http_client is not None and agv_config is not None:
             from bsd_unitree_controller.service.agv_service import AgvService
@@ -220,7 +220,7 @@ class ControllerNode(_BaseNode):
     def is_alive(self) -> bool:
         """节点是否存活。
 
-        供健康检查路由 /api/v1/alive 和 /api/v1/ros/status 调用。
+        供健康检查路由 /api/v1/alive 调用。
         rclpy.ok() 在 rclpy 初始化且未 shutdown 时为 True。
         """
         if not _RCLPY_AVAILABLE:
