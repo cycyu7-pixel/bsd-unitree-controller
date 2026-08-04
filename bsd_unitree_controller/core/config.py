@@ -76,7 +76,7 @@ class RosConfig(BaseModel):
     """
 
     enabled: bool = True                  # 是否启用 ROS 节点
-    node_name: str = "web_controller"     # ROS 节点名
+    node_name: str = "api_ctr"     # ROS 节点名
 
 
 # ── 顶层配置 ────────────────────────────────────────────────────────

@@ -44,19 +44,19 @@ class ControllerNode(_BaseNode):
         - create_service: 提供本节点可被调用的服务
 
     节点名从 config.ros.node_name 读取（后续接入时改 __init__ 签名），
-    当前骨架阶段硬编码默认值为 "web_controller"。
+    当前骨架阶段硬编码默认值为 "api_ctr"。
     """
 
     def __init__(
         self,
-        node_name: str = "web_controller",
+        node_name: str = "api_ctr",
         http_client=None,
         agv_config=None,
     ) -> None:
         """初始化节点。
 
         Args:
-            node_name: ROS 节点名，默认 "web_controller"。
+            node_name: ROS 节点名，默认 "api_ctr"。
             http_client: HttpClient 实例，供 AgvService 调用外部 HTTP 接口。
                         None 时不注册 AGV service。
             agv_config: AgvConfig 实例，AGV 调度配置。
@@ -240,7 +240,7 @@ def is_ros_available() -> bool:
 
 
 def init_ros(
-    node_name: str = "web_controller",
+    node_name: str = "api_ctr",
     http_client=None,
     agv_config=None,
 ) -> Optional[ControllerNode]:

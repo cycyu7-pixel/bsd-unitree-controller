@@ -12,7 +12,7 @@
 - 规范的 FastAPI 分层骨架（启动、配置、异常、统一返回）
 - 带重试的 HTTP 客户端封装（httpx + tenacity）
 - ROS 2 节点封装（rclpy 软依赖，单进程双线程）
-- 存活检查：HTTP `/api/v1/alive` + ROS service `/web_controller/is_alive` 共享 HealthService
+- 存活检查：HTTP `/api/v1/alive` + ROS service `/api_ctr/is_alive` 共享 HealthService
 - 急停控制：HTTP `/api/v1/estop/trigger` -> ROS service `/g1/estop/trigger`（service call 模式）
 - systemd 部署：开机自启 + 崩溃自动重启
 
@@ -242,7 +242,7 @@ log:
 # ROS 节点配置
 ros:
   enabled: true
-  node_name: "web_controller"
+  node_name: "api_ctr"
 ```
 
 | 字段 | 默认值 | 说明 |
@@ -254,7 +254,7 @@ ros:
 | `log.level` | `INFO` | 日志级别 |
 | `log.dir` | `logs` | 日志文件目录，为空只输出控制台 |
 | `ros.enabled` | `true` | 是否启用 ROS 节点，false 则纯 HTTP 模式 |
-| `ros.node_name` | `web_controller` | ROS 节点名 |
+| `ros.node_name` | `api_ctr` | ROS 节点名 |
 
 ### 环境变量覆盖
 
@@ -288,13 +288,13 @@ curl http://127.0.0.1:18800/api/v1/test
 
 ### `GET /api/v1/alive` - 节点存活检查
 
-走 service 层，HTTP 和 ROS service `/web_controller/is_alive` 共享 `HealthService`。
+走 service 层，HTTP 和 ROS service `/api_ctr/is_alive` 共享 `HealthService`。
 
 ```bash
 curl http://127.0.0.1:18800/api/v1/alive
 ```
 ```json
-{"code": 1, "data": {"status": "alive", "node_name": "web_controller", "timestamp": "..."}}
+{"code": 1, "data": {"status": "alive", "node_name": "api_ctr", "timestamp": "..."}}
 ```
 
 ### `GET /api/v1/ros/status` - ROS 节点状态
@@ -303,7 +303,7 @@ curl http://127.0.0.1:18800/api/v1/alive
 curl http://127.0.0.1:18800/api/v1/ros/status
 ```
 ```json
-{"code": 1, "data": {"status": "alive", "node_name": "web_controller"}}
+{"code": 1, "data": {"status": "alive", "node_name": "api_ctr"}}
 ```
 
 ### `POST /api/v1/estop/trigger` - 急停控制（service call 模式）
@@ -337,9 +337,9 @@ curl -X POST http://127.0.0.1:18800/api/v1/estop/trigger
 
 | 类型 | 名称 | 消息类型 | 方向 | 用途 |
 | --- | --- | --- | --- | --- |
-| service | `/web_controller/is_alive` | `std_srvs/Trigger` | server | 存活检查 |
-| service | `/web_controller/call_agv` | `std_srvs/Trigger` | server | 呼叫 AGV |
-| service | `/web_controller/return_agv` | `std_srvs/Trigger` | server | AGV 返库 |
+| service | `/api_ctr/is_alive` | `std_srvs/Trigger` | server | 存活检查 |
+| service | `/api_ctr/call_agv` | `std_srvs/Trigger` | server | 呼叫 AGV |
+| service | `/api_ctr/return_agv` | `std_srvs/Trigger` | server | AGV 返库 |
 | service | `/g1/estop/trigger` | `std_srvs/Trigger` | client | 急停控制 |
 
 ### 调用方式
@@ -349,15 +349,15 @@ curl -X POST http://127.0.0.1:18800/api/v1/estop/trigger
 source ~/bsd-unitree-controller/scripts/ros_env.sh
 
 # 1. 查看节点
-ros2 node list | grep web_controller
-# -> /web_controller
+ros2 node list | grep api_ctr
+# -> /api_ctr
 
 # 2. 调用存活检查 service
-ros2 service call /web_controller/is_alive std_srvs/srv/Trigger
-# -> success=True, message='alive|node=web_controller|ts=...'
+ros2 service call /api_ctr/is_alive std_srvs/srv/Trigger
+# -> success=True, message='alive|node=api_ctr|ts=...'
 
 # 3. 查看节点注册的所有接口
-ros2 node info /web_controller
+ros2 node info /api_ctr
 ```
 
 ### 其他 ROS 节点调用本服务（Python 示例）
@@ -371,7 +371,7 @@ class CallerNode(Node):
     def __init__(self):
         super().__init__("caller")
         # 创建 client，指向本服务的 is_alive service
-        self._client = self.create_client(Trigger, "/web_controller/is_alive")
+        self._client = self.create_client(Trigger, "/api_ctr/is_alive")
         self._client.wait_for_service()
 
     def check_alive(self):
@@ -509,10 +509,10 @@ source ~/unitree_ros2_ws/install/setup.bash
 ros2 pkg list | grep bsd                    # -> bsd_unitree_controller
 
 # 2. ROS 节点注册
-ros2 node list | grep web_controller            # -> /web_controller
+ros2 node list | grep api_ctr            # -> /api_ctr
 
 # 3. ROS service 调用
-ros2 service call /web_controller/is_alive std_srvs/srv/Trigger  # -> success=True
+ros2 service call /api_ctr/is_alive std_srvs/srv/Trigger  # -> success=True
 
 # 4. HTTP 接口
 curl http://127.0.0.1:18800/api/v1/test     # -> {"code":1,...}
@@ -633,10 +633,10 @@ uv run python -m bsd_unitree_controller.main
 | `port is already allocated` | 18800 被占 | `ss -tlnp | grep 18800` 查并 kill |
 | pip 报 SOCKS 错误 | 代理干扰 | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY` |
 
-### ROS 节点看不到 /web_controller
+### ROS 节点看不到 /api_ctr
 
 ```bash
-ros2 node list | grep web_controller
+ros2 node list | grep api_ctr
 ```
 
 如果看不到，检查：
@@ -652,7 +652,7 @@ ros2 node list | grep web_controller
 # service 是否注册
 ros2 service list | grep is_alive
 # service 类型
-ros2 service type /web_controller/is_alive
+ros2 service type /api_ctr/is_alive
 ```
 
 ### 开发机 ROS 接口返回 50002
