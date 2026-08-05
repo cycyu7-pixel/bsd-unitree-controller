@@ -110,21 +110,34 @@ class AgvService:
     def handle_arrived(self, payload: Mapping[str, Any]) -> dict:
         """处理 AGV 到位回调。
 
-        AGV 到位后，调度系统回调本接口通知。当前只取 container 缓存供返库用，
-        workstation 对方不一定传，缺失时记为空串。后续可扩展（如通知 ROS 节点）。
+        AGV 到位后，调度系统回调本接口通知。对方传完整字段（podCode/robotId/
+        taskCode/位置/电量等），本系统当前只取 podCode 缓存供返库用，
+        其余字段记录日志便于排查，后续可扩展处理。
 
         Args:
-            payload: 对方回调传来的数据，必含 container，workstation 可选。
+            payload: 对方回调传来的完整数据。
 
         Returns:
             dict，按对方期望格式返回 {"success": true, "message": "..."}。
         """
-        # workstation 对方不一定传，None 统一转空串便于日志和返回
-        workstation = payload.get("workstation") or ""
-        container = payload.get("container") or ""
-        logger.info("AGV 已到位: workstation={}, container={}", workstation, container)
+        # 取关键字段（container 是对方实际用的字段名，podCode 兼容）
+        container = payload.get("container") or payload.get("podCode") or ""
+        task_code = payload.get("taskCode") or ""
+        robot_id = payload.get("robotId") or ""
+        robot_type = payload.get("robotType") or ""
+        status_code = payload.get("statusCode")
+        battery = payload.get("batteryLevel")
 
-        # container 缓存到实例，供 return_agv 使用
+        # 完整记录对方传的参数，便于排查
+        logger.info(
+            "AGV 已到位: container={}, taskCode={}, robotId={}, robotType={}, "
+            "statusCode={}, battery={}%, posX={}, posY={}",
+            container, task_code, robot_id, robot_type,
+            status_code, battery,
+            payload.get("posX"), payload.get("posY"),
+        )
+
+        # container 缓存到实例，供 return_agv 使用（返库时作为 podNo）
         self._last_container = container
 
         # 后续扩展点：到位后可通知 ROS 节点或触发业务流程
@@ -132,7 +145,7 @@ class AgvService:
 
         return {
             "success": True,
-            "message": f"AGV 到位通知已接收: workstation={workstation}, container={container}",
+            "message": f"AGV 到位通知已接收: container={container}, robotId={robot_id}",
         }
 
     def return_agv(self, dto=None) -> dict:

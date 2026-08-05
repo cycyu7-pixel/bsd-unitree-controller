@@ -24,20 +24,49 @@ router = APIRouter(prefix="/agv", tags=["AGV 调度"])
 
 
 # ── AGV 到位回调入参 ──────────────────────────────────────────
-# 对方回调参数格式：{"workstation":"W03","container":"T0383614"}
+# 对方回调传完整字段，DTO 跟对方实际传的字段完全对齐
+# 本系统当前只取 podCode 缓存供返库用，其余字段接收后记录日志
 
 class AgvArrivedDTO(BaseModel):
     """AGV 到位回调入参。
 
-    对方（AGV 调度系统）回调时传一大堆字段，本系统当前只关心 container。
-    workstation 对方不一定传，设为可选，缺失时用空串占位。
-    其余字段靠 extra="allow" 自动接收，不校验也不报错。
+    跟对方（AGV 调度系统）实际传的字段完全对齐。
+    所有字段可选，对方传什么接什么，不传的字段为 None。
+    本系统当前只取 podCode 缓存供返库用，后续可扩展处理其他字段。
     """
 
-    model_config = {"extra": "allow"}  # 允许额外字段，兼容对方传 taskCode/robotId 等一大堆字段
+    model_config = {"extra": "ignore"}  # 忽略未定义的额外字段，Swagger 不显示 additionalProp
 
-    workstation: str | None = Field(None, description="工位号，对方不一定传")
-    container: str = Field(..., description="容器/货架编号")
+    # 容器/任务信息
+    container: str | None = Field(None, description="容器编号（返库时作为 podNo）")
+    podCode: str | None = Field(None, description="容器/货架编号（兼容字段）")
+    taskCode: str | None = Field(None, description="任务编号")
+    taskModeId: str | None = Field(None, description="任务模式编号")
+
+    # 机器人信息
+    robotId: str | None = Field(None, description="机器人编号")
+    robotType: str | None = Field(None, description="机器人类型")
+
+    # 位置信息
+    posX: float | None = Field(None, description="X 坐标")
+    posY: float | None = Field(None, description="Y 坐标")
+    realX: float | None = Field(None, description="实际 X 坐标")
+    realY: float | None = Field(None, description="实际 Y 坐标")
+    radian: float | None = Field(None, description="弧度")
+    delta: str | None = Field(None, description="偏差")
+
+    # 状态信息
+    status: int | None = Field(None, description="状态码")
+    statusCode: int | None = Field(None, description="状态码明细")
+    batteryLevel: int | None = Field(None, description="电量百分比")
+
+    # 扩展信息
+    customData: str | None = Field(None, description="自定义数据（JSON 字符串）")
+    mapCodeCollection: str | None = Field(None, description="地图坐标集合（JSON 字符串）")
+
+    # 时间
+    createTime: str | None = Field(None, description="创建时间")
+    updateTime: str | None = Field(None, description="更新时间")
 
 
 # ── 呼叫 AGV ─────────────────────────────────────────────────

@@ -77,31 +77,88 @@ def test_call_agv_failure_raises() -> None:
 
 
 def test_handle_arrived_returns_success() -> None:
-    """到位回调：service 返回 success=true，message 含 container。"""
+    """到位回调：完整接收对方参数，返回 success=true。
+
+    用对方实际传的完整参数测试（container/podCode/robotId/taskCode/位置/电量等）。
+    """
     mock = _MockHttpClient({})
     cfg = AgvConfig()
     svc = AgvService(config=cfg, http_client=mock)
 
-    result = svc.handle_arrived({"workstation": "W03", "container": "T0383614"})
+    # 对方实际传的完整参数（container 和 podCode 都有，值一样）
+    result = svc.handle_arrived({
+        "container": "T0377461",
+        "podCode": "T0377461",
+        "taskModeId": "C003",
+        "delta": "0",
+        "customData": '{"nearestBinPositionCode":"040054D2500013","positionCode":"030055D2506013"}',
+        "updateTime": "2026-08-05 09:21:52.5",
+        "robotId": "257",
+        "realY": 166.4010009765625,
+        "radian": -1.5722899436950684,
+        "realX": 219.8509979248047,
+        "posX": 219.85,
+        "posY": 166.4,
+        "taskCode": "fa0bb34feef8495f9b3e0b742b9382c0",
+        "createTime": "2026-08-05 09:21:52.5",
+        "robotType": "HAIRO",
+        "mapCodeCollection": "[\"(202.42,183.24)\",\"(219.85,166.4)\",\"(202.42,183.24)\"]",
+        "batteryLevel": 79,
+        "status": 0,
+        "statusCode": 1,
+    })
 
     assert result["success"] is True
-    assert "到位" in result["message"]
+    assert "T0377461" in result["message"]
+    assert "257" in result["message"]
+
+
+def test_handle_arrived_with_container_only() -> None:
+    """到位回调：只有 container 也能正常接收。"""
+    mock = _MockHttpClient({})
+    cfg = AgvConfig()
+    svc = AgvService(config=cfg, http_client=mock)
+
+    result = svc.handle_arrived({"container": "T0383614"})
+
+    assert result["success"] is True
     assert "T0383614" in result["message"]
 
 
 # ── HTTP 入口测试 ──────────────────────────────────────────────
 
 def test_agv_arrived_endpoint_returns_raw_dict() -> None:
-    """AGV 到位回调接口直接返回 dict（不包 Result），符合对方期望。"""
+    """AGV 到位回调接口直接返回 dict（不包 Result），符合对方期望。
+
+    用对方实际的完整参数格式测试。
+    """
     with TestClient(app) as client:
-        resp = client.post("/api/v1/agv/arrived", json={"workstation": "W03", "container": "T0383614"})
+        resp = client.post("/api/v1/agv/arrived", json={
+            "container": "T0377461",
+            "podCode": "T0377461",
+            "taskModeId": "C003",
+            "robotId": "257",
+            "taskCode": "fa0bb34feef8495f9b3e0b742b9382c0",
+            "robotType": "HAIRO",
+            "posX": 219.85,
+            "posY": 166.4,
+            "realX": 219.8509979248047,
+            "realY": 166.4010009765625,
+            "radian": -1.5722899436950684,
+            "delta": "0",
+            "batteryLevel": 79,
+            "status": 0,
+            "statusCode": 1,
+            "customData": '{"nearestBinPositionCode":"040054D2500013","positionCode":"030055D2506013"}',
+            "mapCodeCollection": "[\"(202.42,183.24)\",\"(219.85,166.4)\",\"(202.42,183.24)\"]",
+            "createTime": "2026-08-05 09:21:52.5",
+            "updateTime": "2026-08-05 09:21:52.5",
+        })
 
         assert resp.status_code == 200
         body = resp.json()
-        # 不包 Result，直接是 {"success": true, "message": "..."}
         assert body["success"] is True
-        assert "message" in body
-        assert "T0383614" in body["message"]
+        assert "T0377461" in body["message"]
 
 
 # ── 返库测试 ──────────────────────────────────────────────────
