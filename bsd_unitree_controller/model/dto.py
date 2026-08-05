@@ -15,9 +15,9 @@ class AgvCallDTO(BaseModel):
     传了对应字段就用传入的值覆盖默认值。
     """
 
-    barcode: str | None = Field(None, description="条码，默认空字符串")
-    podCategory: str | None = Field(None, description="货架类别，默认 '1'")
-    workstation: str | None = Field(None, description="工位号，默认从配置读取")
+    barcode: str | None = Field(default="", description="条码，默认空字符串")
+    podCategory: str | None = Field(default="", description="货架类别，默认空字符串")
+    workstation: str | None = Field(default="", description="工位号，默认空字符串，不传则从配置读取")
 
 
 class AgvReturnDTO(BaseModel):
@@ -28,7 +28,7 @@ class AgvReturnDTO(BaseModel):
     container 不传时用到位回调缓存的值。
     """
 
-    podCategory: str | None = Field(None, description="货架类别，默认空字符串")
-    podNo: str | None = Field(None, description="容器/货架编号，默认用到位回调缓存的 container")
-    type: str | None = Field(None, description="类型，默认 'FK'")
-    workstationNo: str | None = Field(None, description="工位号，默认从配置读取")
+    podCategory: str | None = Field(default="", description="货架类别，默认空字符串")
+    podNo: str | None = Field(default="", description="容器/货架编号，默认用到位回调缓存的 container")
+    type: str | None = Field(default="", description="类型，默认 'FK'")
+    workstationNo: str | None = Field(default="", description="工位号，默认空字符串，不传则从配置读取")

@@ -139,6 +139,7 @@ class AgvService:
 
         # container 缓存到实例，供 return_agv 使用（返库时作为 podNo）
         self._last_container = container
+        logger.info("AGV 到位缓存 container: [{}]", container)
 
         # 后续扩展点：到位后可通知 ROS 节点或触发业务流程
         # 例如：ros_node.publish_arrived(payload)
@@ -174,7 +175,9 @@ class AgvService:
         pod_no = (dto.podNo if dto and dto.podNo is not None else None)
         if not pod_no:
             pod_no = getattr(self, "_last_container", None)
+            logger.info("AGV 返库: 使用缓存的 container=[{}]", pod_no)
         if not pod_no:
+            logger.warning("AGV 返库失败: 无 container 可用，请先等待到位回调")
             raise BizException(
                 code=50004,
                 message="无 container 可用，请先呼叫 AGV 并等待到位回调，或在入参中传 podNo",
@@ -196,7 +199,7 @@ class AgvService:
             "workstationNo": workstation_no,
         }
 
-        logger.info("AGV 返库: url={}, payload={}", url, payload)
+        logger.info("AGV 返库: url={}, payload={}, headers={}", url, payload, self._headers)
 
         # 调 AGV 调度系统（带固定鉴权请求头）
         resp = self._http.post(url, json=payload, headers=self._headers)
