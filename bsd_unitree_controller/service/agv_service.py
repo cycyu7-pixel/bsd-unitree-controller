@@ -40,7 +40,13 @@ class AgvService:
         2. 处理到位：对方回调通知 AGV 到位，记录日志并返回确认
 
     HTTP 入口（/api/v1/agv/call 和 /api/v1/agv/arrived）调本服务。
+
+    注意：_last_container 是类变量，跨请求共享。
+    FastAPI 每次请求创建新 AgvService 实例，所以不能存实例变量上。
     """
+
+    # 类变量：跨请求共享到位回调缓存的 container
+    _last_container: str | None = None
 
     def __init__(self, config: AgvConfig, http_client: HttpCaller) -> None:
         """初始化服务。
@@ -80,7 +86,7 @@ class AgvService:
         # 字段优先级：DTO 传入 > 默认值
         barcode = (dto.barcode if dto and dto.barcode is not None else "") or ""
         pod_category = (dto.podCategory if dto and dto.podCategory is not None else "2") or "2"
-        workstation = (dto.workstation if dto and dto.workstation is not None else self._config.workstation)
+        workstation = (dto.workstation if dto and dto.workstation is not None else self._config.workstation) or self._config.workstation
 
         # 构造请求体
         payload = {
@@ -137,8 +143,9 @@ class AgvService:
             payload.get("posX"), payload.get("posY"),
         )
 
-        # container 缓存到实例，供 return_agv 使用（返库时作为 podNo）
-        self._last_container = container
+        # container 缓存到类变量，供 return_agv 使用（返库时作为 podNo）
+        # 注意：FastAPI 每次请求创建新实例，所以不能存实例变量
+        AgvService._last_container = container
         logger.info("AGV 到位缓存 container: [{}]", container)
 
         # 后续扩展点：到位后可通知 ROS 节点或触发业务流程
@@ -174,7 +181,7 @@ class AgvService:
         # podNo 优先级：DTO 传入 > 缓存 container
         pod_no = (dto.podNo if dto and dto.podNo is not None else None)
         if not pod_no:
-            pod_no = getattr(self, "_last_container", None)
+            pod_no = AgvService._last_container
             logger.info("AGV 返库: 使用缓存的 container=[{}]", pod_no)
         if not pod_no:
             logger.warning("AGV 返库失败: 无 container 可用，请先等待到位回调")
@@ -186,7 +193,7 @@ class AgvService:
         # 其他字段优先级：DTO 传入 > 默认值
         pod_category = (dto.podCategory if dto and dto.podCategory is not None else "") or ""
         type_val = (dto.type if dto and dto.type is not None else "FK") or "FK"
-        workstation_no = (dto.workstationNo if dto and dto.workstationNo is not None else self._config.workstation)
+        workstation_no = (dto.workstationNo if dto and dto.workstationNo is not None else self._config.workstation) or self._config.workstation
 
         # 拼完整 URL
         url = f"{self._config.base_url}{self._config.return_path}"
@@ -214,7 +221,7 @@ class AgvService:
         logger.info("AGV 返库成功: podNo={}", pod_no)
 
         # 返库成功后清除缓存，避免下次返库用到旧的 container
-        self._last_container = None
+        AgvService._last_container = None
 
         return {
             "workstation": workstation_no,
