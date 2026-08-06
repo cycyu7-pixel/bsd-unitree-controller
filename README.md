@@ -116,7 +116,7 @@ uv run uvicorn bsd_unitree_controller.main:app --reload --host 0.0.0.0 --port 18
 
 ```bash
 # 1. 把包放到 ROS 工作空间
-cp -r ~/bsd-unitree-controller ~/unitree_ros2_ws/src/bsd_unitree_controller
+rsync -a --exclude='.git' --exclude='.venv' --exclude='__pycache__' --exclude='logs' --exclude='.idea' --exclude='.zcode' --exclude='*.egg-info' ~/bsd-unitree-controller/ ~/unitree_ros2_ws/src/bsd_unitree_controller/
 
 # 2. colcon 编译
 cd ~/unitree_ros2_ws
@@ -485,7 +485,7 @@ cd ~
 git clone https://github.com/cycyu7-pixel/bsd-unitree-controller.git
 
 # 2. 把包放到 ROS 工作空间
-cp -r ~/bsd-unitree-controller ~/unitree_ros2_ws/src/bsd_unitree_controller
+rsync -a --exclude='.git' --exclude='.venv' --exclude='__pycache__' --exclude='logs' --exclude='.idea' --exclude='.zcode' --exclude='*.egg-info' ~/bsd-unitree-controller/ ~/unitree_ros2_ws/src/bsd_unitree_controller/
 
 # 3. 装 Python 依赖（清代理避免报错）
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY
@@ -527,7 +527,7 @@ cd ~/bsd-unitree-controller
 git pull
 
 # 2. 同步到工作空间
-cp -r ~/bsd-unitree-controller ~/unitree_ros2_ws/src/bsd_unitree_controller
+rsync -a --exclude='.git' --exclude='.venv' --exclude='__pycache__' --exclude='logs' --exclude='.idea' --exclude='.zcode' --exclude='*.egg-info' ~/bsd-unitree-controller/ ~/unitree_ros2_ws/src/bsd_unitree_controller/
 
 # 3. 重新编译
 cd ~/unitree_ros2_ws
