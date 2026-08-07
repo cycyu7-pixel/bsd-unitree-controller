@@ -14,6 +14,8 @@
 - ROS 2 节点封装（rclpy 软依赖，单进程双线程）
 - 存活检查：HTTP `/api/v1/alive` + ROS service `/api_ctr/is_alive` 共享 HealthService
 - 急停控制：HTTP `/api/v1/estop/trigger` -> ROS service `/g1/estop/trigger`（service call 模式）
+- AGV 调度：呼叫小车到工位、到位回调、返库（HTTP + ROS service 共享 AgvService）
+- EPC 条码读取：调 RFID 服务发起扫描，回调缓存 EPC，失败自动重扫（限次数防死循环）
 - systemd 部署：开机自启 + 崩溃自动重启
 
 **不包含**：
@@ -171,10 +173,12 @@ bsd-unitree-controller/
 │   │   └── v1/                 #     v1 版本路由
 │   │       ├── __init__.py     #       v1_router 汇总
 │   │       ├── controller.py   #       机器人本体控制（健康检查/存活/急停）
-│   │       └── agv.py          #       AGV 调度（呼叫/到位回调）
+│   │       ├── agv.py          #       AGV 调度（呼叫/到位回调/返库）
+│   │       └── epc.py          #       EPC 条码读取（发起扫描/回调）
 │   ├── service/                #   业务逻辑层（@Service，不依赖框架）
 │   │   ├── controller_service.py #    存活检查 + 急停业务逻辑
-│   │   └── agv_service.py      #     AGV 呼叫 + 到位回调业务逻辑
+│   │   ├── agv_service.py      #     AGV 呼叫 + 到位回调 + 返库业务逻辑
+│   │   └── epc_service.py      #     EPC 扫描 + 回调 + 失败自动重扫逻辑
 │   ├── client/                 #   出站 HTTP（@FeignClient）
 │   │   └── http_client.py      #     httpx + tenacity 封装
 │   ├── ros/                    #   对内 ROS 通信（软依赖 rclpy）
@@ -189,7 +193,8 @@ bsd-unitree-controller/
 │       └── logging.py          #     loguru 日志初始化
 └── tests/                      # 测试（pytest + TestClient）
     ├── test_controller.py
-    └── test_agv.py
+    ├── test_agv.py
+    └── test_epc.py
 ```
 
 | 路径 | 职责 |
@@ -203,7 +208,11 @@ bsd-unitree-controller/
 | `core/deps.py` | 公共依赖项，路由通过 `Depends` 取 |
 | `api/server.py` | 装配 app、lifespan 管理 HttpClient + ROS 生命周期 |
 | `api/v1/controller.py` | 机器人本体控制：健康检查、存活检查、ROS 状态、急停 |
+| `api/v1/agv.py` | AGV 调度：呼叫、到位回调、返库 |
+| `api/v1/epc.py` | EPC 条码读取：发起扫描、结果回调 |
 | `service/controller_service.py` | 存活检查 + 急停业务逻辑（HTTP + ROS 共享） |
+| `service/agv_service.py` | AGV 呼叫、到位回调、返库业务逻辑 |
+| `service/epc_service.py` | EPC 扫描、回调、失败自动重扫业务逻辑 |
 | `client/http_client.py` | 出站 HTTP 调用，通用 get/post |
 | `ros/node.py` | ControllerNode，含 service server/service client |
 | `model/response.py` | `Result<T>` / `PageResult<T>` 统一返回 |
@@ -243,6 +252,12 @@ log:
 ros:
   enabled: true
   node_name: "api_ctr"
+
+# EPC 条码读取服务配置
+# 调 RFID 服务发起扫描，RFID 读到 EPC 后回调本系统
+epc:
+  base_url: "http://localhost:8080"     # RFID 服务基础地址
+  scan_path: "/api/rfid/scan"           # 发起扫描接口路径
 ```
 
 | 字段 | 默认值 | 说明 |
@@ -255,6 +270,10 @@ ros:
 | `log.dir` | `logs` | 日志文件目录，为空只输出控制台 |
 | `ros.enabled` | `true` | 是否启用 ROS 节点，false 则纯 HTTP 模式 |
 | `ros.node_name` | `api_ctr` | ROS 节点名 |
+| `epc.base_url` | `http://localhost:8080` | RFID 服务基础地址 |
+| `epc.scan_path` | `/api/rfid/scan` | RFID 发起扫描接口路径 |
+
+> 说明：EPC 失败自动重试次数 `MAX_RETRIES` 在代码里写死（`service/epc_service.py`），不在配置中。
 
 ### 环境变量覆盖
 
@@ -267,6 +286,8 @@ yaml 里的任何字段都能被环境变量覆盖，**优先级高于配置文�
 | `BSD_UPSTREAM__TIMEOUT` | `upstream.timeout` | `5` |
 | `BSD_ROS__ENABLED` | `ros.enabled` | `false` |
 | `BSD_ROS__NODE_NAME` | `ros.node_name` | `my_controller` |
+| `BSD_EPC__BASE_URL` | `epc.base_url` | `http://192.168.1.10:8080` |
+| `BSD_EPC__SCAN_PATH` | `epc.scan_path` | `/api/rfid/scan` |
 
 ```bash
 # 开发机关闭 ROS
@@ -316,6 +337,78 @@ curl -X POST http://127.0.0.1:18800/api/v1/estop/trigger
 ```json
 {"code": 1, "data": {"success": true, "message": "..."}}
 ```
+
+### `POST /api/v1/epc/start-scan` - 发起 EPC 扫描
+
+调 RFID 服务（`epc.base_url + epc.scan_path`）发起一次 EPC 条码扫描，对方返回 `requestId` 后本服务缓存，等待扫描结果回调。
+
+```bash
+curl -X POST http://127.0.0.1:18800/api/v1/epc/start-scan
+```
+```json
+{"code": 1, "message": "success", "data": {"requestId": "a1b2c3d4e5f6"}}
+```
+
+`requestId` 用于后续回调时定位当前扫描，保证 EPC 读取的一致性。
+
+### `POST /api/v1/epc/callback` - EPC 扫描结果回调（RFID 服务调我们）
+
+RFID 服务扫描到 EPC 或超时失败后回调本接口。**按对方期望格式返回 raw dict（不包 Result）**。
+
+入参（对应 RFID 服务 `ScanCallbackVO`）：
+
+```json
+{
+  "requestId": "a1b2c3d4e5f6",
+  "epc": "E2XX1234567890",
+  "error": null
+}
+```
+
+返回：
+
+```json
+{"success": true, "message": "EPC 回调已接收: requestId=a1b2c3d4e5f6, epc=E2XX1234567890"}
+```
+
+### EPC 业务流程与重试机制
+
+```
+调用方                    bsd-unitree-controller (Python :18800)      bsd-robot-rfid (Java :8080)
+  │                                  │                                       │
+  │ POST /api/v1/epc/start-scan      │                                       │
+  │ ────────────────────────────────►│  POST /api/rfid/scan（无参数）        │
+  │                                  │ ─────────────────────────────────────►│
+  │                                  │ ◄── {success, data:{requestId}} ──── │
+  │                                  │  缓存 _last_request_id = requestId    │
+  │ ◄─ Result.ok({requestId}) ───────│   清空 _last_epc                      │
+  │                                  │                                       │
+  │                     （RFID 异步扫描标签，35s 超时）                        │
+  │                                  │ ◄── POST /api/v1/epc/callback ──────  │
+  │                                  │     {requestId, epc, error}           │
+  │                                  │                                       │
+  │                                  │ requestId 匹配当前扫描？              │
+  │                                  │   ├─ 否 → 过期/无关回调，忽略         │
+  │                                  │   └─ 是 ↓                            │
+  │                                  │     error 为 null 且 epc 有值？       │
+  │                                  │       ├─ 是 → 缓存 _last_epc = epc    │
+  │                                  │       │     重试计数归零              │
+  │                                  │       └─ 否（失败）↓                 │
+  │                                  │         清理缓存，_retry_count + 1    │
+  │                                  │         ├─ 未达 MAX_RETRIES →         │
+  │                                  │         │   自动重扫（重新发起扫描）   │
+  │                                  │         └─ 达 MAX_RETRIES=3 → 停止    │
+  │                                  │              等上层重新发起            │
+```
+
+关键点：
+
+- **一致性校验**：回调必须 `requestId == 当前缓存的 _last_request_id` 才处理，防止把过期/无关回调误更新到当前 EPC
+- **成功条件**：`requestId 匹配 && 有 epc && error 为 null` 才保存 `_last_epc`
+- **失败自动重扫**：扫描失败（error 非空或没读到 epc）时清理缓存，自动重新发起扫描
+- **防死循环**：失败自动重试次数上限 `MAX_RETRIES = 3`（代码写死于 `service/epc_service.py`），达到上限停止自动重扫，返回失败信息，等待上层重新调用 `/start-scan`
+- **主动重扫归零**：上层调 `/start-scan` 视为全新一轮，重试计数归零；中途成功也归零
+- **缓存读取**：后续业务（如未来的上架）读取 `EpcService._last_epc` 和 `AgvService._last_container`（类比 `_last_container` 用法）
 
 ### 错误码
 

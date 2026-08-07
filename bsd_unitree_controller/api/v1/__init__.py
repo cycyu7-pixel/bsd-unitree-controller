@@ -9,8 +9,10 @@ from fastapi import APIRouter
 
 from bsd_unitree_controller.api.v1.agv import router as agv_router
 from bsd_unitree_controller.api.v1.controller import router as controller_router
+from bsd_unitree_controller.api.v1.epc import router as epc_router
 
 # v1 版本总路由，不在这里加 prefix，由上层 api_router 统一加 /api/v1
 v1_router = APIRouter()
 v1_router.include_router(controller_router)
 v1_router.include_router(agv_router)
+v1_router.include_router(epc_router)

@@ -62,6 +62,17 @@ class AgvConfig(BaseModel):
     workstation: str = "W03"                                # 工位号（每个机器人不同）
 
 
+class EpcConfig(BaseModel):
+    """EPC 条码读取服务配置。
+
+    调 RFID 服务发起扫描，RFID 读到 EPC 后回调本系统。
+    base_url 拆分出来便于切换环境（测试/生产）。
+    """
+
+    base_url: str = "http://localhost:8080"   # RFID 服务基础地址
+    scan_path: str = "/api/rfid/scan"         # 发起扫描接口路径
+
+
 class LogConfig(BaseModel):
     """日志配置。"""
 
@@ -89,6 +100,7 @@ class AppConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig)
     ros: RosConfig = Field(default_factory=RosConfig)
     agv: AgvConfig = Field(default_factory=AgvConfig)
+    epc: EpcConfig = Field(default_factory=EpcConfig)
 
 
 # ── 加载逻辑 ────────────────────────────────────────────────────────

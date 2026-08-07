@@ -18,7 +18,7 @@
 # host 绑定 WiFi 网卡 IP，只接收外部网络的请求
 # 内部网络（192.168.123.x）访问不了，如需内部访问改回 0.0.0.0
 server:
-  host: "192.168.31.15"
+  host: "0.0.0.0"
   port: 18800
 
 # ── 出站 HTTP 调用通用配置 ──
@@ -40,6 +40,12 @@ log:
 ros:
   enabled: true                # 是否启用 ROS 节点
   node_name: "api_ctr"  # ROS 节点名（ros2 node list 里显示的名字）
+
+# ── EPC 条码读取服务配置 ──
+# 调 RFID 服务发起扫描，RFID 读到 EPC 后回调本系统
+epc:
+  base_url: "http://localhost:8080"         # RFID 服务基础地址
+  scan_path: "/api/rfid/scan"               # 发起扫描接口路径
 
 # ── AGV 调度系统配置 ──
 # 呼叫 AGV 小车到指定工位，接收 AGV 到位回调，返库
